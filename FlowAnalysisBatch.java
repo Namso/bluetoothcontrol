@@ -6,19 +6,30 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.OutputStreamWriter;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Deque;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 public class FlowAnalysisBatch {
 
     public static void main(String[] args) throws Exception {
         if (args.length == 0) {
-            System.out.println("Uso: java FlowAnalysisBatch <ruta-json> [carpeta-salida]");
+            System.out.println("Uso: java FlowAnalysisBatch <ruta-json> [carpeta-salida] [job-semilla]");
             return;
         }
 
         String jsonPath = args[0];
         String outputDir = args.length > 1 ? args[1] : "analisis";
+        String seedJob = args.length > 2 ? args[2].trim() : "";
 
         FlowAnalyzer analyzer = new FlowAnalyzer();
         long startedAt = System.currentTimeMillis();
@@ -33,7 +44,12 @@ public class FlowAnalysisBatch {
         writeJsonResult(dir, result, elapsed);
         writeTextReport(dir, result, elapsed, jsonPath);
         writeLists(dir, result);
-        writeHtmlReport(dir, result, elapsed, jsonPath);
+        writeHtmlReport(dir, result, elapsed, jsonPath, seedJob);
+        writeMainPathReport(dir, result);
+
+        if (seedJob.length() > 0) {
+            writeSeedTreeReport(dir, result, seedJob);
+        }
 
         System.out.println("Analisis completado en " + elapsed + " ms");
         System.out.println("Archivos generados en: " + dir.getAbsolutePath());
@@ -110,7 +126,7 @@ public class FlowAnalysisBatch {
         writeUtf8(new File(dir, "score_salida.csv"), outCsv.toString());
     }
 
-    private static void writeHtmlReport(File dir, FlowAnalyzer.AnalysisResult result, long elapsed, String sourcePath) throws Exception {
+    private static void writeHtmlReport(File dir, FlowAnalyzer.AnalysisResult result, long elapsed, String sourcePath, String seedJob) throws Exception {
         JSONObject data = result.toJson();
         String json = data.toString();
 
@@ -147,9 +163,9 @@ public class FlowAnalysisBatch {
         html.append("<div class=\"box\">\n");
         html.append("<h2>Malla completa (render incremental)</h2>\n");
         html.append("<p class=\"muted\">Con job semilla puedes explorar hacia atras (profundidad negativa) y hacia adelante (profundidad positiva).</p>\n");
-        html.append("<p class=\"muted\">Colores: semilla rojo, final azul, iniciador amarillo, arista negativa violeta.</p>\n");
+        html.append("<p class=\"muted\">Colores: semilla rojo, final azul, iniciador amarillo, normal celeste, inicial+final cian, arista negativa violeta.</p>\n");
         html.append("<div class=\"row\">\n");
-        html.append("<label>Job semilla:</label><input id=\"seed\" type=\"text\" size=\"18\"/>\n");
+        html.append("<label>Job semilla:</label><input id=\"seed\" type=\"text\" size=\"18\" value=\"").append(escapeHtml(seedJob)).append("\"/>\n");
         html.append("<label>Desde profundidad:</label><input id=\"depthFrom\" type=\"number\" value=\"-2\" min=\"-20\" max=\"0\"/>\n");
         html.append("<label>Hasta profundidad:</label><input id=\"depthTo\" type=\"number\" value=\"3\" min=\"0\" max=\"20\"/>\n");
         html.append("<label>Max nodos:</label><input id=\"maxNodes\" type=\"number\" value=\"800\" min=\"50\" max=\"5000\"/>\n");
@@ -182,9 +198,10 @@ public class FlowAnalysisBatch {
         html.append("function buildLayout(subset){const n=subset.nodes.length;const pos=new Map();const cols=Math.max(2,Math.floor(Math.sqrt(n)));for(let i=0;i<n;i++){const c=i%cols;const r=Math.floor(i/cols);const x=80+(c/(cols-1||1))*1000+(Math.random()*14-7);const y=70+(r/(Math.ceil(n/cols)-1||1))*500+(Math.random()*14-7);pos.set(subset.nodes[i],{x:x,y:y,vx:0,vy:0});}for(let step=0;step<120;step++){for(let i=0;i<subset.nodes.length;i++){const a=pos.get(subset.nodes[i]);for(let j=i+1;j<subset.nodes.length;j++){const b=pos.get(subset.nodes[j]);let dx=a.x-b.x;let dy=a.y-b.y;let dist=Math.sqrt(dx*dx+dy*dy)+0.1;let f=2600/(dist*dist);a.vx+=dx/dist*f;b.vx-=dx/dist*f;a.vy+=dy/dist*f;b.vy-=dy/dist*f;}}for(let i=0;i<subset.edges.length;i++){const e=subset.edges[i];const a=pos.get(e.source);const b=pos.get(e.target);let dx=b.x-a.x;let dy=b.y-a.y;let dist=Math.sqrt(dx*dx+dy*dy)+0.1;let stretch=(dist-75)*0.02;a.vx+=dx/dist*stretch;a.vy+=dy/dist*stretch;b.vx-=dx/dist*stretch;b.vy-=dy/dist*stretch;}subset.nodes.forEach(name=>{const p=pos.get(name);p.vx*=0.84;p.vy*=0.84;p.x=Math.max(10,Math.min(1200,p.x+p.vx));p.y=Math.max(10,Math.min(580,p.y+p.vy));});}return pos;}\n");
         html.append("function nodeRadius(name){return name===current.seed?8.5:4.5;}\n");
         html.append("function nodeColor(name){if(name===current.seed)return '#ef4444';const isStart=startersSet.has(name);const isFinal=finalsSet.has(name);if(isStart&&isFinal)return '#22d3ee';if(isFinal)return '#60a5fa';if(isStart)return '#facc15';return '#93c5fd';}\n");
+        html.append("function nodeType(name){if(name===current.seed)return 'semilla';const isStart=startersSet.has(name);const isFinal=finalsSet.has(name);if(isStart&&isFinal)return 'inicial+final';if(isStart)return 'inicial';if(isFinal)return 'final';return 'normal';}\n");
         html.append("function draw(){ctx.clearRect(0,0,graph.width,graph.height);for(let i=0;i<current.edges.length;i++){const e=current.edges[i];const a=toScreen(current.pos.get(e.source));const b=toScreen(current.pos.get(e.target));ctx.strokeStyle=e.isBackward?'rgba(167,139,250,0.55)':'rgba(56,189,248,0.25)';ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}ctx.font='11px Arial';ctx.textBaseline='middle';current.nodes.forEach(name=>{const wp=current.pos.get(name);if(!wp)return;const p=toScreen(wp);const r=nodeRadius(name);ctx.fillStyle=nodeColor(name);ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#e5e7eb';ctx.fillText(name,p.x+r+3,p.y);});}\n");
         html.append("function findNode(mx,my){for(let i=current.nodes.length-1;i>=0;i--){const name=current.nodes[i];const wp=current.pos.get(name);if(!wp)continue;const p=toScreen(wp);const r=nodeRadius(name)+3;const dx=mx-p.x;const dy=my-p.y;if((dx*dx+dy*dy)<=r*r)return name;}return ''; }\n");
-        html.append("function showTooltip(name,mx,my){if(!name){tooltip.style.display='none';return;}tooltip.style.display='block';tooltip.textContent=name;tooltip.style.left=(mx+12)+'px';tooltip.style.top=(my+12)+'px';}\n");
+        html.append("function showTooltip(name,mx,my){if(!name){tooltip.style.display='none';return;}const meta=(DATA.jobsByName&&DATA.jobsByName[name])?DATA.jobsByName[name]:{};const inCount=(meta.inCount===undefined)?'N/A':meta.inCount;const outCount=(meta.outCount===undefined)?'N/A':meta.outCount;const isn=meta.isn||'N/A';const dc=meta.datacenter||'N/A';tooltip.style.display='block';tooltip.textContent='jobname: '+name+' | datacenter: '+dc+' | #inCondition: '+inCount+' | #outCondition: '+outCount+' | #isn: '+isn+' | tipo: '+nodeType(name);tooltip.style.left=(mx+12)+'px';tooltip.style.top=(my+12)+'px';}\n");
         html.append("function render(){const seed=document.getElementById('seed').value.trim();const depthFrom=parseInt(document.getElementById('depthFrom').value,10);const depthTo=parseInt(document.getElementById('depthTo').value,10);const maxNodes=parseInt(document.getElementById('maxNodes').value,10)||800;const safeFrom=isNaN(depthFrom)?-2:Math.max(-20,Math.min(0,depthFrom));const safeTo=isNaN(depthTo)?3:Math.max(0,Math.min(20,depthTo));const subset=buildSubset(seed,safeFrom,safeTo,maxNodes);if(subset.nodes.length===0){current={nodes:[],edges:[],pos:new Map(),nodeDepth:new Map(),seed:''};draw();return;}current={nodes:subset.nodes,edges:subset.edges,pos:buildLayout(subset),nodeDepth:subset.nodeDepth,seed:subset.seed};view={offsetX:40,offsetY:40,scale:1};draw();}\n");
         html.append("graph.addEventListener('mousedown',ev=>{const r=graph.getBoundingClientRect();const mx=ev.clientX-r.left;const my=ev.clientY-r.top;const hit=findNode(mx,my);lastX=mx;lastY=my;if(hit){dragNode=hit;}else{isPanning=true;}});\n");
         html.append("graph.addEventListener('mousemove',ev=>{const r=graph.getBoundingClientRect();const mx=ev.clientX-r.left;const my=ev.clientY-r.top;if(dragNode){const p=current.pos.get(dragNode);if(p){p.x+=(mx-lastX)/view.scale;p.y+=(my-lastY)/view.scale;}lastX=mx;lastY=my;draw();showTooltip(dragNode,mx,my);return;}if(isPanning){view.offsetX+=mx-lastX;view.offsetY+=my-lastY;lastX=mx;lastY=my;draw();return;}const hover=findNode(mx,my);showTooltip(hover,mx,my);});\n");
@@ -196,6 +213,378 @@ public class FlowAnalysisBatch {
         html.append("</html>\n");
 
         writeUtf8(new File(dir, "reporte_completo.html"), html.toString());
+    }
+
+    private static void writeSeedTreeReport(File dir, FlowAnalyzer.AnalysisResult result, String seedJob) throws Exception {
+        if (!result.mapNodes.contains(seedJob)) {
+            StringBuilder missing = new StringBuilder();
+            missing.append("SEMILLA NO ENCONTRADA\n");
+            missing.append("job semilla: ").append(seedJob).append("\n");
+            missing.append("No existe dentro de los jobs canonicos.\n");
+            writeUtf8(new File(dir, "arbol_semilla.txt"), missing.toString());
+            return;
+        }
+
+        Map<String, Set<String>> incoming = buildIncoming(result.mapEdges);
+        Map<String, Set<String>> outgoing = buildOutgoing(result.mapEdges);
+        Set<String> startersSet = new HashSet<String>(result.starters);
+
+        LinkedHashSet<String> backwardNodes = new LinkedHashSet<String>();
+        Map<String, Integer> backwardDepth = new HashMap<String, Integer>();
+        Deque<String> queue = new ArrayDeque<String>();
+        queue.add(seedJob);
+        backwardDepth.put(seedJob, Integer.valueOf(0));
+
+        while (!queue.isEmpty()) {
+            String current = queue.poll();
+            backwardNodes.add(current);
+            int depth = backwardDepth.get(current).intValue();
+            Set<String> parents = incoming.get(current);
+            if (parents == null) {
+                continue;
+            }
+            for (String parent : parents) {
+                int candidateDepth = depth - 1;
+                Integer old = backwardDepth.get(parent);
+                if (old == null || candidateDepth < old.intValue()) {
+                    backwardDepth.put(parent, Integer.valueOf(candidateDepth));
+                    queue.add(parent);
+                }
+            }
+        }
+
+        LinkedHashSet<String> forwardNodes = new LinkedHashSet<String>();
+        Deque<String> forwardQ = new ArrayDeque<String>();
+        forwardQ.add(seedJob);
+        while (!forwardQ.isEmpty()) {
+            String current = forwardQ.poll();
+            if (!forwardNodes.add(current)) {
+                continue;
+            }
+            Set<String> children = outgoing.get(current);
+            if (children == null) {
+                continue;
+            }
+            for (String child : children) {
+                if (!forwardNodes.contains(child)) {
+                    forwardQ.add(child);
+                }
+            }
+        }
+
+        List<String> reachedStarters = new ArrayList<String>();
+        for (String node : backwardNodes) {
+            if (startersSet.contains(node)) {
+                reachedStarters.add(node);
+            }
+        }
+        Collections.sort(reachedStarters);
+
+        List<Map.Entry<String, Integer>> orderedBackward = new ArrayList<Map.Entry<String, Integer>>(backwardDepth.entrySet());
+        Collections.sort(orderedBackward, new Comparator<Map.Entry<String, Integer>>() {
+            public int compare(Map.Entry<String, Integer> a, Map.Entry<String, Integer> b) {
+                int cmp = Integer.compare(a.getValue().intValue(), b.getValue().intValue());
+                if (cmp != 0) {
+                    return cmp;
+                }
+                return a.getKey().compareTo(b.getKey());
+            }
+        });
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("REPORTE DE ARBOL DESDE SEMILLA\n");
+        sb.append("Semilla: ").append(seedJob).append("\n");
+        sb.append("Nodos alcanzados hacia atras (hasta iniciadores): ").append(backwardNodes.size()).append("\n");
+        sb.append("Iniciadores alcanzados: ").append(reachedStarters.size()).append("\n");
+        sb.append("Nodos alcanzados hacia adelante: ").append(forwardNodes.size()).append("\n\n");
+
+        sb.append("INICIADORES ALCANZADOS\n");
+        for (String starter : reachedStarters) {
+            sb.append(starter).append("\n");
+        }
+
+        sb.append("\nARBOL HACIA ATRAS (depth negativo)\n");
+        for (Map.Entry<String, Integer> row : orderedBackward) {
+            sb.append(row.getKey()).append(" | depth=").append(row.getValue().intValue()).append("\n");
+        }
+
+        sb.append("\nSUBARBOL HACIA ADELANTE\n");
+        List<String> orderedForward = new ArrayList<String>(forwardNodes);
+        Collections.sort(orderedForward);
+        for (String node : orderedForward) {
+            sb.append(node).append("\n");
+        }
+
+        writeUtf8(new File(dir, "arbol_semilla.txt"), sb.toString());
+    }
+
+    private static void writeMainPathReport(File dir, FlowAnalyzer.AnalysisResult result) throws Exception {
+        List<List<String>> topRoutes = estimateMainRoutes(result, 5);
+        StringBuilder sb = new StringBuilder();
+        sb.append("RUTAS PRINCIPALES ESTIMADAS\n");
+        sb.append("Metodo: aproximacion por SCC + camino mas largo en DAG condensado.\n");
+        sb.append("Se reportan maximo 5 rutas candidatas.\n\n");
+
+        if (topRoutes.isEmpty()) {
+            sb.append("No se pudo estimar una ruta principal.\n");
+        } else {
+            for (int i = 0; i < topRoutes.size(); i++) {
+                List<String> route = topRoutes.get(i);
+                sb.append("Ruta ").append(i + 1).append(" | largo aproximado=").append(route.size()).append("\n");
+                for (int j = 0; j < route.size(); j++) {
+                    sb.append(route.get(j));
+                    if (j < route.size() - 1) {
+                        sb.append(" -> ");
+                    }
+                }
+                sb.append("\n\n");
+            }
+        }
+
+        writeUtf8(new File(dir, "ruta_principal_estimacion.txt"), sb.toString());
+    }
+
+    private static List<List<String>> estimateMainRoutes(FlowAnalyzer.AnalysisResult result, int maxRoutes) {
+        Map<String, Integer> indexByNode = new HashMap<String, Integer>();
+        for (int i = 0; i < result.mapNodes.size(); i++) {
+            indexByNode.put(result.mapNodes.get(i), Integer.valueOf(i));
+        }
+
+        List<Set<Integer>> adj = new ArrayList<Set<Integer>>();
+        for (int i = 0; i < result.mapNodes.size(); i++) {
+            adj.add(new LinkedHashSet<Integer>());
+        }
+        for (FlowAnalyzer.Edge e : result.mapEdges) {
+            Integer from = indexByNode.get(e.source);
+            Integer to = indexByNode.get(e.target);
+            if (from != null && to != null) {
+                adj.get(from.intValue()).add(to);
+            }
+        }
+
+        TarjanState st = new TarjanState(result.mapNodes.size(), adj);
+        for (int i = 0; i < result.mapNodes.size(); i++) {
+            if (st.index[i] == -1) {
+                tarjan(i, st);
+            }
+        }
+
+        int sccCount = st.components.size();
+        List<Set<Integer>> dag = new ArrayList<Set<Integer>>();
+        int[] weight = new int[sccCount];
+        for (int i = 0; i < sccCount; i++) {
+            dag.add(new LinkedHashSet<Integer>());
+            weight[i] = st.components.get(i).size();
+        }
+
+        for (int i = 0; i < result.mapNodes.size(); i++) {
+            int sccFrom = st.compIndex[i];
+            for (Integer next : adj.get(i)) {
+                int sccTo = st.compIndex[next.intValue()];
+                if (sccFrom != sccTo) {
+                    dag.get(sccFrom).add(Integer.valueOf(sccTo));
+                }
+            }
+        }
+
+        int[] indeg = new int[sccCount];
+        for (int i = 0; i < sccCount; i++) {
+            for (Integer to : dag.get(i)) {
+                indeg[to.intValue()]++;
+            }
+        }
+
+        Deque<Integer> q = new ArrayDeque<Integer>();
+        for (int i = 0; i < sccCount; i++) {
+            if (indeg[i] == 0) {
+                q.add(Integer.valueOf(i));
+            }
+        }
+
+        List<Integer> topo = new ArrayList<Integer>();
+        while (!q.isEmpty()) {
+            int cur = q.poll().intValue();
+            topo.add(Integer.valueOf(cur));
+            for (Integer to : dag.get(cur)) {
+                int idx = to.intValue();
+                indeg[idx]--;
+                if (indeg[idx] == 0) {
+                    q.add(Integer.valueOf(idx));
+                }
+            }
+        }
+
+        int[] best = new int[sccCount];
+        int[] nextHop = new int[sccCount];
+        for (int i = 0; i < sccCount; i++) {
+            best[i] = weight[i];
+            nextHop[i] = -1;
+        }
+        for (int i = topo.size() - 1; i >= 0; i--) {
+            int node = topo.get(i).intValue();
+            for (Integer to : dag.get(node)) {
+                int t = to.intValue();
+                int candidate = weight[node] + best[t];
+                if (candidate > best[node]) {
+                    best[node] = candidate;
+                    nextHop[node] = t;
+                }
+            }
+        }
+
+        List<Integer> starts = new ArrayList<Integer>();
+        for (int i = 0; i < sccCount; i++) {
+            starts.add(Integer.valueOf(i));
+        }
+        Collections.sort(starts, new Comparator<Integer>() {
+            public int compare(Integer a, Integer b) {
+                return Integer.compare(best[b.intValue()], best[a.intValue()]);
+            }
+        });
+
+        List<List<String>> routes = new ArrayList<List<String>>();
+        Set<String> seen = new HashSet<String>();
+        for (Integer s : starts) {
+            if (routes.size() >= maxRoutes) {
+                break;
+            }
+            List<Integer> sccRoute = new ArrayList<Integer>();
+            int cur = s.intValue();
+            Set<Integer> loopGuard = new HashSet<Integer>();
+            while (cur >= 0 && !loopGuard.contains(Integer.valueOf(cur))) {
+                loopGuard.add(Integer.valueOf(cur));
+                sccRoute.add(Integer.valueOf(cur));
+                cur = nextHop[cur];
+            }
+
+            List<String> routeNames = new ArrayList<String>();
+            for (Integer scc : sccRoute) {
+                List<String> names = new ArrayList<String>();
+                for (Integer idx : st.components.get(scc.intValue())) {
+                    names.add(result.mapNodes.get(idx.intValue()));
+                }
+                Collections.sort(names);
+                if (names.size() == 1) {
+                    routeNames.add(names.get(0));
+                } else {
+                    StringBuilder block = new StringBuilder();
+                    block.append("{");
+                    int limit = Math.min(5, names.size());
+                    for (int i = 0; i < limit; i++) {
+                        if (i > 0) {
+                            block.append("|");
+                        }
+                        block.append(names.get(i));
+                    }
+                    if (names.size() > limit) {
+                        block.append("|...");
+                    }
+                    block.append("}");
+                    routeNames.add(block.toString());
+                }
+            }
+
+            String signature = join(routeNames, "->");
+            if (!seen.contains(signature)) {
+                seen.add(signature);
+                routes.add(routeNames);
+            }
+        }
+
+        return routes;
+    }
+
+    private static class TarjanState {
+        int[] index;
+        int[] low;
+        boolean[] onStack;
+        int[] compIndex;
+        int cursor = 0;
+        Deque<Integer> stack = new ArrayDeque<Integer>();
+        List<Set<Integer>> adj;
+        List<List<Integer>> components = new ArrayList<List<Integer>>();
+
+        TarjanState(int n, List<Set<Integer>> adj) {
+            this.adj = adj;
+            this.index = new int[n];
+            this.low = new int[n];
+            this.onStack = new boolean[n];
+            this.compIndex = new int[n];
+            for (int i = 0; i < n; i++) {
+                index[i] = -1;
+                low[i] = -1;
+                compIndex[i] = -1;
+            }
+        }
+    }
+
+    private static void tarjan(int v, TarjanState st) {
+        st.index[v] = st.cursor;
+        st.low[v] = st.cursor;
+        st.cursor++;
+        st.stack.push(Integer.valueOf(v));
+        st.onStack[v] = true;
+
+        for (Integer wObj : st.adj.get(v)) {
+            int w = wObj.intValue();
+            if (st.index[w] == -1) {
+                tarjan(w, st);
+                st.low[v] = Math.min(st.low[v], st.low[w]);
+            } else if (st.onStack[w]) {
+                st.low[v] = Math.min(st.low[v], st.index[w]);
+            }
+        }
+
+        if (st.low[v] == st.index[v]) {
+            List<Integer> comp = new ArrayList<Integer>();
+            while (true) {
+                int w = st.stack.pop().intValue();
+                st.onStack[w] = false;
+                st.compIndex[w] = st.components.size();
+                comp.add(Integer.valueOf(w));
+                if (w == v) {
+                    break;
+                }
+            }
+            st.components.add(comp);
+        }
+    }
+
+    private static Map<String, Set<String>> buildOutgoing(List<FlowAnalyzer.Edge> edges) {
+        Map<String, Set<String>> map = new HashMap<String, Set<String>>();
+        for (FlowAnalyzer.Edge edge : edges) {
+            Set<String> set = map.get(edge.source);
+            if (set == null) {
+                set = new LinkedHashSet<String>();
+                map.put(edge.source, set);
+            }
+            set.add(edge.target);
+        }
+        return map;
+    }
+
+    private static Map<String, Set<String>> buildIncoming(List<FlowAnalyzer.Edge> edges) {
+        Map<String, Set<String>> map = new HashMap<String, Set<String>>();
+        for (FlowAnalyzer.Edge edge : edges) {
+            Set<String> set = map.get(edge.target);
+            if (set == null) {
+                set = new LinkedHashSet<String>();
+                map.put(edge.target, set);
+            }
+            set.add(edge.source);
+        }
+        return map;
+    }
+
+    private static String join(List<String> values, String separator) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                sb.append(separator);
+            }
+            sb.append(values.get(i));
+        }
+        return sb.toString();
     }
 
     private static void writeLines(File file, List<String> lines) throws Exception {

@@ -15,6 +15,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.LinkedHashMap;
 
 public class FlowAnalyzer {
 
@@ -82,6 +83,24 @@ public class FlowAnalyzer {
         }
     }
 
+    public static class JobInfo {
+        String jobname;
+        String datacenter;
+        String isn;
+        int inCount;
+        int outCount;
+
+        JSONObject toJson() {
+            JSONObject o = new JSONObject();
+            o.put("jobname", jobname);
+            o.put("datacenter", datacenter);
+            o.put("isn", isn);
+            o.put("inCount", inCount);
+            o.put("outCount", outCount);
+            return o;
+        }
+    }
+
     public static class AnalysisResult {
         int totalJobsRead;
         int canonicalCount;
@@ -99,6 +118,7 @@ public class FlowAnalyzer {
         Map<String, Integer> outboundScore = new HashMap<String, Integer>();
         List<String> mapNodes = new ArrayList<String>();
         List<Edge> mapEdges = new ArrayList<Edge>();
+        Map<String, JobInfo> jobsByName = new LinkedHashMap<String, JobInfo>();
 
         JSONObject toJson() {
             JSONObject o = new JSONObject();
@@ -138,6 +158,12 @@ public class FlowAnalyzer {
                 edges.put(e.toJson());
             }
             o.put("mapEdges", edges);
+
+            JSONObject jobsMeta = new JSONObject();
+            for (Map.Entry<String, JobInfo> row : jobsByName.entrySet()) {
+                jobsMeta.put(row.getKey(), row.getValue().toJson());
+            }
+            o.put("jobsByName", jobsMeta);
             return o;
         }
     }
@@ -214,6 +240,14 @@ public class FlowAnalyzer {
         Set<String> missingNames = new HashSet<String>();
 
         for (Job job : canonical) {
+            JobInfo info = new JobInfo();
+            info.jobname = job.jobname;
+            info.datacenter = job.datacenter;
+            info.isn = job.isn;
+            info.inCount = job.inCond.size();
+            info.outCount = job.outCond.size();
+            result.jobsByName.put(job.jobname, info);
+
             int inbound = 0;
             int outbound = 0;
 
