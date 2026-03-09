@@ -259,7 +259,9 @@ public class JobAnalyzer {
             }
         }
 
-        // 4e: Jobs iniciales
+        // 4e: Jobs iniciales — sin predecesores en el grafo resuelto
+        //     Un job es INICIAL si graphBackward esta vacio (nadie le produce sus condiciones)
+        //     Esto es correcto incluso si tiene inConds (todas rotas = no tiene predecesores reales)
         System.out.println("[INFO]   Identificando jobs iniciales...");
         for (Job job : resolvedJobs.values()) {
             Set<String> preds = graphBackward.get(job.jobname);
@@ -274,7 +276,7 @@ public class JobAnalyzer {
             }
         }
 
-        // 4f: Jobs finales
+        // 4f: Jobs finales — sin sucesores en el grafo resuelto
         System.out.println("[INFO]   Identificando jobs finales...");
         for (Job job : resolvedJobs.values()) {
             Set<String> succs = graphForward.get(job.jobname);
@@ -380,7 +382,9 @@ public class JobAnalyzer {
 
         // 01 Iniciales
         try (PrintWriter pw = pw(dir + "/01_JOBS_INICIALES.txt")) {
-            pw.println("JOBS INICIALES - Sin predecesores validos (disparan flujo)");
+            pw.println("JOBS INICIALES - Sin predecesores en el grafo resuelto (disparan flujo)");
+            pw.println("NOTA: Un job puede tener inConds > 0 pero ser inicial si TODAS sus");
+            pw.println("      condiciones de entrada estan ROTAS (nadie las produce).");
             pw.println(repeat("=", 100));
             pw.printf("%-25s %-15s %-8s %-8s %-10s %-10s%n", "JOBNAME","DATACENTER","IN","OUT","BRK_IN","BRK_OUT");
             pw.println(repeat("-", 100));
@@ -391,7 +395,9 @@ public class JobAnalyzer {
 
         // 02 Finales
         try (PrintWriter pw = pw(dir + "/02_JOBS_FINALES.txt")) {
-            pw.println("JOBS FINALES - Sin sucesores validos (ultimos en ejecutar)");
+            pw.println("JOBS FINALES - Sin sucesores en el grafo resuelto (ultimos en ejecutar)");
+            pw.println("NOTA: Un job puede tener outConds > 0 pero ser final si TODAS sus");
+            pw.println("      condiciones de salida estan ROTAS (nadie las consume).");
             pw.println(repeat("=", 100));
             pw.printf("%-25s %-15s %-8s %-8s %-10s %-10s%n", "JOBNAME","DATACENTER","IN","OUT","BRK_IN","BRK_OUT");
             pw.println(repeat("-", 100));
@@ -580,15 +586,15 @@ public class JobAnalyzer {
             return;
         }
 
-        // Generar HTML con depth controls en la web
-        String html = generateViewerHtml(bfs, seedSet, "VISOR 3D DE DEPENDENCIAS", true);
+        // Generar HTML — exportar TODOS los datos del grafo para que el filtro
+        // de profundidad en JS pueda expandir a nodos fuera del BFS inicial
+        String html = generateViewerHtml(bfs, seedSet, "VISOR 3D DE DEPENDENCIAS", depth);
         Files.write(Paths.get(dir + "/09_VISOR_3D.html"), html.getBytes(StandardCharsets.UTF_8));
         System.out.println("[INFO] Visor 3D exportado a: " + dir + "/09_VISOR_3D.html");
     }
 
     // =========================================================================
-    // PASO 8: ARBOL COMPLETO DE UN JOB (nueva funcionalidad)
-    // Genera TXT y visor HTML con profundidad controlable desde la web
+    // PASO 8: ARBOL COMPLETO DE UN JOB
     // =========================================================================
     public void exportJobTree(String dir, String jobArbol) throws IOException {
         if (jobArbol == null || jobArbol.isEmpty()) return;
@@ -604,15 +610,11 @@ public class JobAnalyzer {
 
         Job seedJobObj = resolvedJobs.get(upper);
 
-        // =============================================
-        // BFS completo sin limite (backward hasta iniciales, forward hasta finales)
-        // =============================================
-        Set<String> seedSet = new LinkedHashSet<>();
-        seedSet.add(upper);
-
-        // BFS backward completo (hasta los iniciadores)
+        // BFS backward completo
         Set<String> allBackward = new LinkedHashSet<>();
         allBackward.add(upper);
+        Map<String, Integer> depthMapBack = new HashMap<>();
+        depthMapBack.put(upper, 0);
         {
             Queue<String> queue = new LinkedList<>();
             queue.add(upper);
@@ -620,12 +622,14 @@ public class JobAnalyzer {
             visited.add(upper);
             while (!queue.isEmpty()) {
                 String current = queue.poll();
+                int cd = depthMapBack.get(current);
                 Set<String> preds = graphBackward.get(current);
                 if (preds != null) {
                     for (String pred : preds) {
                         if (!visited.contains(pred)) {
                             visited.add(pred);
                             allBackward.add(pred);
+                            depthMapBack.put(pred, cd + 1);
                             queue.add(pred);
                         }
                     }
@@ -633,9 +637,11 @@ public class JobAnalyzer {
             }
         }
 
-        // BFS forward completo (hasta los finales)
+        // BFS forward completo
         Set<String> allForward = new LinkedHashSet<>();
         allForward.add(upper);
+        Map<String, Integer> depthMapFwd = new HashMap<>();
+        depthMapFwd.put(upper, 0);
         {
             Queue<String> queue = new LinkedList<>();
             queue.add(upper);
@@ -643,12 +649,14 @@ public class JobAnalyzer {
             visited.add(upper);
             while (!queue.isEmpty()) {
                 String current = queue.poll();
+                int cd = depthMapFwd.get(current);
                 Set<String> succs = graphForward.get(current);
                 if (succs != null) {
                     for (String succ : succs) {
                         if (!visited.contains(succ)) {
                             visited.add(succ);
                             allForward.add(succ);
+                            depthMapFwd.put(succ, cd + 1);
                             queue.add(succ);
                         }
                     }
@@ -661,6 +669,11 @@ public class JobAnalyzer {
         allNodes.addAll(allBackward);
         allNodes.addAll(allForward);
 
+        // Compute depth map: backward nodes get positive depth (distance from seed going back)
+        // forward nodes get positive depth (distance from seed going forward)
+        // This way both directions use positive numbers.
+        // We'll store them separately for the viewer.
+
         // Recolectar edges
         Map<String, String[]> allEdges = new LinkedHashMap<>();
         for (String node : allNodes) {
@@ -669,23 +682,24 @@ public class JobAnalyzer {
                 for (String succ : succs) {
                     if (allNodes.contains(succ)) {
                         String ek = node + "|" + succ;
-                        // Determinar dirección: si el source está en backward-only = bck; si está en forward = fwd
-                        String dir2;
-                        if (allBackward.contains(node) && allBackward.contains(succ) && !allForward.contains(node) && !allForward.contains(succ)) {
-                            dir2 = "bck";
-                        } else if (allBackward.contains(node) && allBackward.contains(succ) &&
-                                   !node.equals(upper) && !succ.equals(upper)) {
-                            dir2 = "bck";
+                        // Direction: if both are in backward set and not in forward = backward edge
+                        String edgeDir;
+                        if (allBackward.contains(node) && allBackward.contains(succ)
+                            && !node.equals(upper) && !succ.equals(upper)
+                            && !allForward.contains(node) && !allForward.contains(succ)) {
+                            edgeDir = "bck";
+                        } else if (allBackward.contains(node) && succ.equals(upper)) {
+                            edgeDir = "bck";
+                        } else if (node.equals(upper)) {
+                            edgeDir = "fwd";
+                        } else if (allForward.contains(node) && allForward.contains(succ)) {
+                            edgeDir = "fwd";
                         } else {
-                            dir2 = "fwd";
+                            // Mixed zone — backward node connecting to forward
+                            edgeDir = "bck";
                         }
-                        // Edge from backward zone to seed is backward
-                        if (allBackward.contains(node) && succ.equals(upper)) dir2 = "bck";
-                        // Edge from seed forward is forward
-                        if (node.equals(upper)) dir2 = "fwd";
-
                         if (!allEdges.containsKey(ek))
-                            allEdges.put(ek, new String[]{node, succ, dir2});
+                            allEdges.put(ek, new String[]{node, succ, edgeDir});
                     }
                 }
             }
@@ -695,7 +709,6 @@ public class JobAnalyzer {
         List<String> treeInitials = new ArrayList<>();
         List<String> treeFinals = new ArrayList<>();
         for (String node : allNodes) {
-            // Es inicial en el arbol si no tiene predecesores dentro del arbol
             boolean hasPredInTree = false;
             Set<String> preds = graphBackward.get(node);
             if (preds != null) {
@@ -715,67 +728,17 @@ public class JobAnalyzer {
             if (!hasSuccInTree) treeFinals.add(node);
         }
 
-        // Calcular profundidades desde la semilla (backward=negativo, forward=positivo)
-        Map<String, Integer> depthMap = new HashMap<>();
-        depthMap.put(upper, 0);
-        // Forward
-        {
-            Queue<String> queue = new LinkedList<>();
-            queue.add(upper);
-            Set<String> visited = new HashSet<>();
-            visited.add(upper);
-            while (!queue.isEmpty()) {
-                String current = queue.poll();
-                int cd = depthMap.get(current);
-                Set<String> succs = graphForward.get(current);
-                if (succs != null) {
-                    for (String succ : succs) {
-                        if (allForward.contains(succ) && !visited.contains(succ)) {
-                            visited.add(succ);
-                            depthMap.put(succ, cd + 1);
-                            queue.add(succ);
-                        }
-                    }
-                }
-            }
-        }
-        // Backward
-        {
-            Queue<String> queue = new LinkedList<>();
-            queue.add(upper);
-            Set<String> visited = new HashSet<>();
-            visited.add(upper);
-            while (!queue.isEmpty()) {
-                String current = queue.poll();
-                int cd = depthMap.containsKey(current) ? depthMap.get(current) : 0;
-                Set<String> preds = graphBackward.get(current);
-                if (preds != null) {
-                    for (String pred : preds) {
-                        if (allBackward.contains(pred) && !visited.contains(pred)) {
-                            visited.add(pred);
-                            depthMap.put(pred, cd - 1);
-                            queue.add(pred);
-                        }
-                    }
-                }
-            }
-        }
-
-        int maxFwdDepth = 0;
         int maxBckDepth = 0;
-        for (int d : depthMap.values()) {
-            if (d > maxFwdDepth) maxFwdDepth = d;
-            if (d < maxBckDepth) maxBckDepth = d;
-        }
+        for (int d : depthMapBack.values()) if (d > maxBckDepth) maxBckDepth = d;
+        int maxFwdDepth = 0;
+        for (int d : depthMapFwd.values()) if (d > maxFwdDepth) maxFwdDepth = d;
 
         System.out.println("[INFO] Arbol completo: " + allNodes.size() + " nodos, " + allEdges.size() + " aristas");
         System.out.println("[INFO] Profundidad backward: " + maxBckDepth + ", forward: " + maxFwdDepth);
         System.out.println("[INFO] Iniciadores del arbol: " + treeInitials.size());
         System.out.println("[INFO] Finales del arbol: " + treeFinals.size());
 
-        // =============================================
         // EXPORTAR TXT
-        // =============================================
         try (PrintWriter pw = pw(dir + "/10_ARBOL_" + upper + ".txt")) {
             pw.println("================================================================");
             pw.println("  ARBOL COMPLETO DE DEPENDENCIAS");
@@ -793,7 +756,7 @@ public class JobAnalyzer {
             pw.println("ARBOL:");
             pw.println("  Total nodos:                 " + allNodes.size());
             pw.println("  Total aristas:               " + allEdges.size());
-            pw.println("  Profundidad backward (max):  " + Math.abs(maxBckDepth));
+            pw.println("  Profundidad backward (max):  " + maxBckDepth);
             pw.println("  Profundidad forward (max):   " + maxFwdDepth);
             pw.println("  Iniciadores (raices):        " + treeInitials.size());
             pw.println("  Finales (hojas):             " + treeFinals.size());
@@ -802,12 +765,12 @@ public class JobAnalyzer {
             pw.println(repeat("=", 100));
             pw.println("INICIADORES DEL ARBOL (raices que disparan el flujo hasta " + upper + ")");
             pw.println(repeat("-", 100));
-            pw.printf("%-25s %-15s %-8s %-8s %-10s%n", "JOBNAME","DATACENTER","IN","OUT","PROFUNDIDAD");
+            pw.printf("%-25s %-15s %-8s %-8s %-10s%n", "JOBNAME","DATACENTER","IN","OUT","DIST_BACK");
             pw.println(repeat("-", 100));
             for (String jn : treeInitials) {
                 Job j = resolvedJobs.get(jn);
                 if (j == null) continue;
-                int d = depthMap.containsKey(jn) ? depthMap.get(jn) : 0;
+                int d = depthMapBack.containsKey(jn) ? depthMapBack.get(jn) : (depthMapFwd.containsKey(jn) ? depthMapFwd.get(jn) : 0);
                 pw.printf("%-25s %-15s %-8d %-8d %-10d%n", jn, j.datacenter, j.inCond.size(), j.outCond.size(), d);
             }
 
@@ -815,37 +778,64 @@ public class JobAnalyzer {
             pw.println(repeat("=", 100));
             pw.println("FINALES DEL ARBOL (hojas que terminan despues de " + upper + ")");
             pw.println(repeat("-", 100));
-            pw.printf("%-25s %-15s %-8s %-8s %-10s%n", "JOBNAME","DATACENTER","IN","OUT","PROFUNDIDAD");
+            pw.printf("%-25s %-15s %-8s %-8s %-10s%n", "JOBNAME","DATACENTER","IN","OUT","DIST_FWD");
             pw.println(repeat("-", 100));
             for (String jn : treeFinals) {
                 Job j = resolvedJobs.get(jn);
                 if (j == null) continue;
-                int d = depthMap.containsKey(jn) ? depthMap.get(jn) : 0;
+                int d = depthMapFwd.containsKey(jn) ? depthMapFwd.get(jn) : (depthMapBack.containsKey(jn) ? depthMapBack.get(jn) : 0);
                 pw.printf("%-25s %-15s %-8d %-8d %-10d%n", jn, j.datacenter, j.inCond.size(), j.outCond.size(), d);
             }
 
             pw.println();
-            pw.println(repeat("=", 100));
-            pw.println("TODOS LOS NODOS DEL ARBOL (ordenados por profundidad)");
-            pw.println(repeat("-", 100));
-            pw.printf("%-25s %-15s %-8s %-8s %-10s %-10s%n", "JOBNAME","DATACENTER","IN","OUT","PROFUNDIDAD","TIPO");
-            pw.println(repeat("-", 100));
+            pw.println(repeat("=", 110));
+            pw.println("TODOS LOS NODOS DEL ARBOL (ordenados por zona y distancia)");
+            pw.println("  ZONA: BCK=backward desde semilla, FWD=forward desde semilla, BOTH=ambos");
+            pw.println(repeat("-", 110));
+            pw.printf("%-25s %-15s %-8s %-8s %-10s %-8s %-10s%n", "JOBNAME","DATACENTER","IN","OUT","DISTANCIA","ZONA","TIPO");
+            pw.println(repeat("-", 110));
 
-            List<Map.Entry<String, Integer>> sortedByDepth = new ArrayList<>(depthMap.entrySet());
-            sortedByDepth.sort(new Comparator<Map.Entry<String, Integer>>() {
-                @Override public int compare(Map.Entry<String, Integer> a, Map.Entry<String, Integer> b) {
-                    return Integer.compare(a.getValue(), b.getValue());
+            // Sort: backward nodes first (by descending dist), then seed, then forward (ascending dist)
+            List<String> sortedNodes = new ArrayList<>(allNodes);
+            final Map<String, Integer> fwdM = depthMapFwd;
+            final Map<String, Integer> bckM = depthMapBack;
+            final String seedUpper = upper;
+            final Set<String> bckSet = allBackward;
+            final Set<String> fwdSet = allForward;
+
+            sortedNodes.sort(new Comparator<String>() {
+                @Override public int compare(String a, String b) {
+                    int orderA = getOrder(a);
+                    int orderB = getOrder(b);
+                    return Integer.compare(orderA, orderB);
+                }
+                int getOrder(String n) {
+                    if (n.equals(seedUpper)) return 0;
+                    if (bckSet.contains(n) && !fwdSet.contains(n)) {
+                        return -(bckM.containsKey(n) ? bckM.get(n) : 0);
+                    }
+                    return (fwdM.containsKey(n) ? fwdM.get(n) : 0);
                 }
             });
 
-            for (Map.Entry<String, Integer> entry : sortedByDepth) {
-                String jn = entry.getKey();
+            Set<String> treeInitialSet = new HashSet<>(treeInitials);
+            Set<String> treeFinalSet = new HashSet<>(treeFinals);
+
+            for (String jn : sortedNodes) {
                 Job j = resolvedJobs.get(jn);
                 if (j == null) continue;
                 String tipo = jn.equals(upper) ? "SEMILLA" :
-                              treeInitials.contains(jn) ? "INICIAL" :
-                              treeFinals.contains(jn) ? "FINAL" : "NORMAL";
-                pw.printf("%-25s %-15s %-8d %-8d %-10d %-10s%n", jn, j.datacenter, j.inCond.size(), j.outCond.size(), entry.getValue(), tipo);
+                              treeInitialSet.contains(jn) ? "INICIAL" :
+                              treeFinalSet.contains(jn) ? "FINAL" : "NORMAL";
+                String zona;
+                int dist;
+                boolean inBck = bckSet.contains(jn) && !jn.equals(upper);
+                boolean inFwd = fwdSet.contains(jn) && !jn.equals(upper);
+                if (jn.equals(upper)) { zona = "SEED"; dist = 0; }
+                else if (inBck && inFwd) { zona = "BOTH"; dist = Math.min(bckM.getOrDefault(jn,0), fwdM.getOrDefault(jn,0)); }
+                else if (inBck) { zona = "BCK"; dist = bckM.getOrDefault(jn, 0); }
+                else { zona = "FWD"; dist = fwdM.getOrDefault(jn, 0); }
+                pw.printf("%-25s %-15s %-8d %-8d %-10d %-8s %-10s%n", jn, j.datacenter, j.inCond.size(), j.outCond.size(), dist, zona, tipo);
             }
 
             pw.println();
@@ -854,35 +844,27 @@ public class JobAnalyzer {
 
         System.out.println("[INFO] Reporte TXT del arbol exportado a: " + dir + "/10_ARBOL_" + upper + ".txt");
 
-        // =============================================
-        // EXPORTAR VISOR HTML CON CONTROL DE PROFUNDIDAD DESDE LA WEB
-        // =============================================
-        String html = generateTreeViewerHtml(upper, allNodes, allEdges, depthMap, maxBckDepth, maxFwdDepth,
+        // EXPORTAR VISOR HTML
+        String html = generateTreeViewerHtml(upper, allNodes, allEdges,
+                                              depthMapBack, depthMapFwd,
+                                              maxBckDepth, maxFwdDepth,
                                               treeInitials, treeFinals);
         Files.write(Paths.get(dir + "/11_VISOR_ARBOL_" + upper + ".html"), html.getBytes(StandardCharsets.UTF_8));
         System.out.println("[INFO] Visor HTML del arbol exportado a: " + dir + "/11_VISOR_ARBOL_" + upper + ".html");
     }
 
     // =========================================================================
-    // PASO 9: RUTAS PRINCIPALES (RUTA CRITICA MAS LARGA)
+    // PASO 9: RUTAS PRINCIPALES
     // =========================================================================
     public void exportCriticalPaths(String dir) throws IOException {
         System.out.println("[INFO] Buscando las 5 rutas internas mas largas...");
 
-        // Encontrar los 5 longest paths usando BFS desde cada job inicial
-        // Para eficiencia, usamos BFS/DFS iterativo con memoización
-        // Longest path en DAG se resuelve con orden topológico
-
-        // Paso 1: Orden topológico (Kahn's algorithm)
+        // Orden topológico (Kahn's algorithm)
         Map<String, Integer> inDegree = new HashMap<>();
-        for (String jn : resolvedJobs.keySet()) {
-            inDegree.put(jn, 0);
-        }
+        for (String jn : resolvedJobs.keySet()) inDegree.put(jn, 0);
         for (Map.Entry<String, Set<String>> e : graphForward.entrySet()) {
             for (String succ : e.getValue()) {
-                if (inDegree.containsKey(succ)) {
-                    inDegree.put(succ, inDegree.get(succ) + 1);
-                }
+                if (inDegree.containsKey(succ)) inDegree.put(succ, inDegree.get(succ) + 1);
             }
         }
 
@@ -900,27 +882,21 @@ public class JobAnalyzer {
                 for (String succ : succs) {
                     if (inDegree.containsKey(succ)) {
                         inDegree.put(succ, inDegree.get(succ) - 1);
-                        if (inDegree.get(succ) == 0) {
-                            tQueue.add(succ);
-                        }
+                        if (inDegree.get(succ) == 0) tQueue.add(succ);
                     }
                 }
             }
         }
 
-        // Si hay ciclos, topoOrder será menor que resolvedJobs
         boolean hasCycles = topoOrder.size() < resolvedJobs.size();
         if (hasCycles) {
             System.out.println("[WARN] El grafo tiene ciclos. Se analizaran solo los " + topoOrder.size() + " nodos sin ciclos.");
         }
 
-        // Paso 2: Longest path via DP en orden topológico
+        // Longest path via DP
         Map<String, Integer> dist = new HashMap<>();
         Map<String, String> parent = new HashMap<>();
-        for (String jn : topoOrder) {
-            dist.put(jn, 0);
-            parent.put(jn, null);
-        }
+        for (String jn : topoOrder) { dist.put(jn, 0); parent.put(jn, null); }
 
         for (String jn : topoOrder) {
             int d = dist.get(jn);
@@ -935,7 +911,6 @@ public class JobAnalyzer {
             }
         }
 
-        // Paso 3: Encontrar los endpoints con mayor distancia
         List<Map.Entry<String, Integer>> sortedDist = new ArrayList<>(dist.entrySet());
         sortedDist.sort(new Comparator<Map.Entry<String, Integer>>() {
             @Override public int compare(Map.Entry<String, Integer> a, Map.Entry<String, Integer> b) {
@@ -943,7 +918,6 @@ public class JobAnalyzer {
             }
         });
 
-        // Top 5 rutas unicas (diferentes endpoints o diferentes paths)
         List<List<String>> topPaths = new ArrayList<>();
         Set<String> usedEndpoints = new HashSet<>();
 
@@ -952,7 +926,6 @@ public class JobAnalyzer {
             String endpoint = entry.getKey();
             if (usedEndpoints.contains(endpoint)) continue;
 
-            // Reconstruir path
             List<String> path = new ArrayList<>();
             String current = endpoint;
             Set<String> visited = new HashSet<>();
@@ -962,17 +935,15 @@ public class JobAnalyzer {
                 current = parent.get(current);
             }
 
-            if (path.size() >= 3) { // Solo rutas con al menos 3 jobs
+            if (path.size() >= 3) {
                 topPaths.add(path);
                 usedEndpoints.add(endpoint);
-                // Marcar el inicio también para evitar rutas muy similares
                 usedEndpoints.add(path.get(0));
             }
         }
 
         System.out.println("[INFO] Encontradas " + topPaths.size() + " rutas principales");
 
-        // Exportar TXT
         try (PrintWriter pw = pw(dir + "/12_RUTAS_PRINCIPALES.txt")) {
             pw.println("================================================================");
             pw.println("  RUTAS PRINCIPALES DEL BANCO");
@@ -1018,8 +989,6 @@ public class JobAnalyzer {
                 }
 
                 pw.println();
-
-                // Imprimir las condiciones que conectan cada paso
                 pw.println("  CADENA DE CONDICIONES:");
                 pw.println("  " + repeat("-", 80));
                 for (int j = 0; j < path.size() - 1; j++) {
@@ -1027,22 +996,17 @@ public class JobAnalyzer {
                     String to = path.get(j + 1);
                     Job fromJob = resolvedJobs.get(from);
                     Job toJob = resolvedJobs.get(to);
-                    // Encontrar las condiciones que conectan from->to
                     List<String> connecting = new ArrayList<>();
                     if (fromJob != null && toJob != null) {
                         for (String outC : fromJob.outCond) {
-                            if (toJob.inCond.contains(outC)) {
-                                connecting.add(outC);
-                            }
+                            if (toJob.inCond.contains(outC)) connecting.add(outC);
                         }
                     }
                     pw.printf("  %s -> %s%n", from, to);
                     if (connecting.isEmpty()) {
                         pw.println("    (conexion indirecta via condiciones compartidas)");
                     } else {
-                        for (String c : connecting) {
-                            pw.println("    Condicion: " + c);
-                        }
+                        for (String c : connecting) pw.println("    Condicion: " + c);
                     }
                 }
                 pw.println();
@@ -1050,7 +1014,6 @@ public class JobAnalyzer {
 
             if (topPaths.isEmpty()) {
                 pw.println("No se encontraron rutas con al menos 3 jobs.");
-                pw.println("Esto puede indicar que el grafo esta muy fragmentado.");
             }
         }
 
@@ -1058,9 +1021,9 @@ public class JobAnalyzer {
     }
 
     // =========================================================================
-    // GENERADOR DE HTML VISOR 3D (reutilizable)
+    // GENERADOR DE HTML VISOR 3D (general)
     // =========================================================================
-    private String generateViewerHtml(BfsResult bfs, Set<String> seedSet, String title, boolean withDepthControls) {
+    private String generateViewerHtml(BfsResult bfs, Set<String> seedSet, String title, int initialDepth) {
         StringBuilder sb = new StringBuilder();
         sb.append("<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"UTF-8\">\n");
         sb.append("<title>" + esc(title) + "</title>\n");
@@ -1075,11 +1038,7 @@ public class JobAnalyzer {
         if (!seedSet.isEmpty() && seedSet.size() <= 3) {
             sb.append("  Semilla: <span style=\"color:#f0f;font-weight:bold\">");
             int si = 0;
-            for (String s : seedSet) {
-                if (si > 0) sb.append(", ");
-                sb.append(esc(s));
-                si++;
-            }
+            for (String s : seedSet) { if (si > 0) sb.append(", "); sb.append(esc(s)); si++; }
             sb.append("</span><br>\n");
         }
         sb.append("</div>\n");
@@ -1088,83 +1047,49 @@ public class JobAnalyzer {
         sb.append("<div id=\"search-box\"><input type=\"text\" id=\"searchInput\" placeholder=\"Buscar jobname y presionar Enter...\"></div>\n");
 
         // Depth controls
-        if (withDepthControls) {
-            sb.append("<div id=\"depth-controls\">\n");
-            sb.append("  <label>Prof. Atras (-): <input type=\"number\" id=\"depthBack\" value=\"5\" min=\"0\" max=\"999\" style=\"width:60px\"></label>\n");
-            sb.append("  <label style=\"margin-left:10px\">Prof. Adelante (+): <input type=\"number\" id=\"depthFwd\" value=\"5\" min=\"0\" max=\"999\" style=\"width:60px\"></label>\n");
-            sb.append("  <button id=\"btnApplyDepth\" style=\"margin-left:10px\">Aplicar</button>\n");
-            sb.append("</div>\n");
-        }
+        sb.append("<div id=\"depth-controls\">\n");
+        sb.append("  <label>Prof. Atras: <input type=\"number\" id=\"depthBack\" value=\"" + initialDepth + "\" min=\"0\" max=\"999\" style=\"width:60px\"></label>\n");
+        sb.append("  <label style=\"margin-left:10px\">Prof. Adelante: <input type=\"number\" id=\"depthFwd\" value=\"" + initialDepth + "\" min=\"0\" max=\"999\" style=\"width:60px\"></label>\n");
+        sb.append("  <button id=\"btnApplyDepth\" style=\"margin-left:10px\">Aplicar</button>\n");
+        sb.append("</div>\n");
 
-        // Legend
         appendLegend(sb);
-
-        sb.append("<div id=\"controls\">Arrastrar: Rotar | Scroll: Zoom | Hover: Info del nodo | Enter: Buscar</div>\n");
+        sb.append("<div id=\"controls\">Click izq: Rotar | Click central: Mover | Scroll: Zoom | Hover: Tooltip | Enter: Buscar</div>\n");
 
         // Inline data
         sb.append("<script>\n");
-        appendDataSets(sb, seedSet, bfs.nodes);
+
+        // Seeds, initial, final sets
+        sb.append("var SEED_SET={");
+        { int si=0; for (String s : seedSet) { if(si>0) sb.append(","); sb.append("\""+esc(s)+"\":1"); si++; } }
+        sb.append("};\n");
+        sb.append("var INITIAL_SET={");
+        { int si=0; for (String s : initialSet) { if(si>0) sb.append(","); sb.append("\""+esc(s)+"\":1"); si++; } }
+        sb.append("};\n");
+        sb.append("var FINAL_SET={");
+        { int si=0; for (String s : finalSet) { if(si>0) sb.append(","); sb.append("\""+esc(s)+"\":1"); si++; } }
+        sb.append("};\n\n");
+
+        // BFS result nodes
         appendNodesJson(sb, bfs.nodes);
         appendEdgesJson(sb, bfs.edges);
 
-        // All graph data for depth filtering (export full forward/backward adjacency for nodes present)
-        sb.append("var GRAPH_FWD={};\n");
-        sb.append("var GRAPH_BCK={};\n");
-        for (String node : bfs.nodes) {
-            Set<String> fwd = graphForward.get(node);
-            if (fwd != null && !fwd.isEmpty()) {
-                sb.append("GRAPH_FWD[\"" + esc(node) + "\"]=[");
-                int fi = 0;
-                for (String f : fwd) {
-                    if (fi > 0) sb.append(",");
-                    sb.append("\"" + esc(f) + "\"");
-                    fi++;
-                }
-                sb.append("];\n");
-            }
-            Set<String> bck = graphBackward.get(node);
-            if (bck != null && !bck.isEmpty()) {
-                sb.append("GRAPH_BCK[\"" + esc(node) + "\"]=[");
-                int fi = 0;
-                for (String b : bck) {
-                    if (fi > 0) sb.append(",");
-                    sb.append("\"" + esc(b) + "\"");
-                    fi++;
-                }
-                sb.append("];\n");
-            }
-        }
-
-        // Also export ALL graph data so depth filter can expand beyond initial BFS
-        sb.append("var ALL_GRAPH_FWD={};\nvar ALL_GRAPH_BCK={};\n");
-        sb.append("var ALL_NODES={};\n");
-        // This could be huge, so we only export nodes reachable within a reasonable range
-        // Actually, let's export everything - the user needs it
+        // FULL graph adjacency for depth re-expansion in JS
+        sb.append("var ALL_GRAPH_FWD={};\nvar ALL_GRAPH_BCK={};\nvar ALL_NODES={};\n");
         for (Map.Entry<String, Set<String>> entry : graphForward.entrySet()) {
             if (!entry.getValue().isEmpty()) {
                 sb.append("ALL_GRAPH_FWD[\"" + esc(entry.getKey()) + "\"]=[");
-                int fi = 0;
-                for (String f : entry.getValue()) {
-                    if (fi > 0) sb.append(",");
-                    sb.append("\"" + esc(f) + "\"");
-                    fi++;
-                }
+                int fi=0; for (String f : entry.getValue()) { if(fi>0) sb.append(","); sb.append("\""+esc(f)+"\""); fi++; }
                 sb.append("];\n");
             }
         }
         for (Map.Entry<String, Set<String>> entry : graphBackward.entrySet()) {
             if (!entry.getValue().isEmpty()) {
                 sb.append("ALL_GRAPH_BCK[\"" + esc(entry.getKey()) + "\"]=[");
-                int fi = 0;
-                for (String b : entry.getValue()) {
-                    if (fi > 0) sb.append(",");
-                    sb.append("\"" + esc(b) + "\"");
-                    fi++;
-                }
+                int fi=0; for (String b : entry.getValue()) { if(fi>0) sb.append(","); sb.append("\""+esc(b)+"\""); fi++; }
                 sb.append("];\n");
             }
         }
-        // Export all node metadata
         for (Job j : resolvedJobs.values()) {
             sb.append("ALL_NODES[\"" + esc(j.jobname) + "\"]={inC:" + j.inCond.size()
                 + ",outC:" + j.outCond.size()
@@ -1175,32 +1100,28 @@ public class JobAnalyzer {
 
         sb.append("</script>\n\n");
 
-        // Three.js
         sb.append("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js\"></script>\n");
         sb.append("<script>\nif(typeof THREE==='undefined'){\n");
         sb.append("  document.body.innerHTML='<div style=\"color:#f44;padding:40px;font-family:monospace\">Error: No se pudo cargar Three.js. Requiere conexion a internet.</div>';\n}\n</script>\n\n");
 
-        // Main rendering script
         sb.append("<script>\n");
-        appendRenderScript(sb, withDepthControls);
+        appendMainScript(sb, false);
         sb.append("</script>\n</body>\n</html>\n");
 
         return sb.toString();
     }
 
     // =========================================================================
-    // GENERADOR DE HTML VISOR ARBOL (con profundidad controlable desde web)
+    // GENERADOR DE HTML VISOR ARBOL
     // =========================================================================
     private String generateTreeViewerHtml(String seedJob,
                                            Set<String> allNodes,
                                            Map<String, String[]> allEdges,
-                                           Map<String, Integer> depthMap,
+                                           Map<String, Integer> depthMapBack,
+                                           Map<String, Integer> depthMapFwd,
                                            int maxBckDepth, int maxFwdDepth,
                                            List<String> treeInitials,
                                            List<String> treeFinals) {
-
-        Set<String> seedSet = new LinkedHashSet<>();
-        seedSet.add(seedJob);
 
         Set<String> treeInitialSet = new HashSet<>(treeInitials);
         Set<String> treeFinalSet = new HashSet<>(treeFinals);
@@ -1211,38 +1132,32 @@ public class JobAnalyzer {
         appendViewerStyles(sb);
         sb.append("</head>\n<body>\n");
 
-        // Info panel
         sb.append("<div id=\"info\">\n");
         sb.append("  <b>ARBOL COMPLETO DE DEPENDENCIAS</b><br>\n");
         sb.append("  Semilla: <span style=\"color:#f0f;font-weight:bold\">" + esc(seedJob) + "</span><br>\n");
         sb.append("  Nodos totales: <span id=\"totalNodes\">" + allNodes.size() + "</span><br>\n");
         sb.append("  Nodos visibles: <span id=\"nodeCount\">" + allNodes.size() + "</span>");
         sb.append(" | Aristas: <span id=\"edgeCount\">" + allEdges.size() + "</span><br>\n");
-        sb.append("  Prof. max atras: " + Math.abs(maxBckDepth) + " | adelante: " + maxFwdDepth + "\n");
+        sb.append("  Prof. max atras: " + maxBckDepth + " | adelante: " + maxFwdDepth + "\n");
         sb.append("</div>\n");
 
         sb.append("<div id=\"tooltip\"></div>\n");
         sb.append("<div id=\"search-box\"><input type=\"text\" id=\"searchInput\" placeholder=\"Buscar jobname y presionar Enter...\"></div>\n");
 
-        // Depth controls
         sb.append("<div id=\"depth-controls\">\n");
-        sb.append("  <label>Prof. Atras (-): <input type=\"number\" id=\"depthBack\" value=\"" + Math.abs(maxBckDepth) + "\" min=\"0\" max=\"999\" style=\"width:60px\"></label>\n");
-        sb.append("  <label style=\"margin-left:10px\">Prof. Adelante (+): <input type=\"number\" id=\"depthFwd\" value=\"" + maxFwdDepth + "\" min=\"0\" max=\"999\" style=\"width:60px\"></label>\n");
+        sb.append("  <label>Prof. Atras: <input type=\"number\" id=\"depthBack\" value=\"" + maxBckDepth + "\" min=\"0\" max=\"999\" style=\"width:60px\"></label>\n");
+        sb.append("  <label style=\"margin-left:10px\">Prof. Adelante: <input type=\"number\" id=\"depthFwd\" value=\"" + maxFwdDepth + "\" min=\"0\" max=\"999\" style=\"width:60px\"></label>\n");
         sb.append("  <button id=\"btnApplyDepth\" style=\"margin-left:10px\">Aplicar</button>\n");
         sb.append("</div>\n");
 
-        // Legend
         appendLegend(sb);
+        sb.append("<div id=\"controls\">Click izq: Rotar | Click central: Mover | Scroll: Zoom | Hover: Tooltip | Enter: Buscar</div>\n");
 
-        sb.append("<div id=\"controls\">Arrastrar: Rotar | Scroll: Zoom | Hover: Info del nodo | Enter: Buscar | Controles de profundidad arriba</div>\n");
-
-        // Data
         sb.append("<script>\n");
 
-        // Seed set
         sb.append("var SEED_SET={\"" + esc(seedJob) + "\":1};\n");
 
-        // Initial/Final dentro del arbol
+        // For the tree, initial/final are within the tree context
         sb.append("var INITIAL_SET={");
         { int si=0; for (String s : treeInitialSet) { if(si>0) sb.append(","); sb.append("\""+esc(s)+"\":1"); si++; } }
         sb.append("};\n");
@@ -1250,8 +1165,8 @@ public class JobAnalyzer {
         { int si=0; for (String s : treeFinalSet) { if(si>0) sb.append(","); sb.append("\""+esc(s)+"\":1"); si++; } }
         sb.append("};\n\n");
 
-        // All nodes with depth info
-        sb.append("var ALL_TREE_NODES=[\n");
+        // All tree nodes
+        sb.append("var NODES=[\n");
         { int idx=0;
           for (String n : allNodes) {
               Job j = resolvedJobs.get(n);
@@ -1260,16 +1175,15 @@ public class JobAnalyzer {
               String dc = j != null ? j.datacenter : "N/A";
               String mem = j != null ? j.memname : "";
               String isn = j != null ? j.isn : "";
-              int depth = depthMap.containsKey(n) ? depthMap.get(n) : 0;
               if (idx > 0) sb.append(",\n");
-              sb.append("  {id:\"" + esc(n) + "\",inC:" + inC + ",outC:" + outC + ",dc:\"" + esc(dc) + "\",mem:\"" + esc(mem) + "\",isn:\"" + esc(isn) + "\",depth:" + depth + "}");
+              sb.append("  {id:\"" + esc(n) + "\",inC:" + inC + ",outC:" + outC + ",dc:\"" + esc(dc) + "\",mem:\"" + esc(mem) + "\",isn:\"" + esc(isn) + "\"}");
               idx++;
           }
         }
         sb.append("\n];\n\n");
 
-        // All edges
-        sb.append("var ALL_TREE_EDGES=[\n");
+        // All tree edges
+        sb.append("var EDGES=[\n");
         { int ei=0;
           for (String[] e : allEdges.values()) {
               if (ei > 0) sb.append(",\n");
@@ -1279,15 +1193,19 @@ public class JobAnalyzer {
         }
         sb.append("\n];\n\n");
 
-        // Depth map for filtering
-        sb.append("var DEPTH_MAP={};\n");
-        for (Map.Entry<String, Integer> entry : depthMap.entrySet()) {
-            sb.append("DEPTH_MAP[\"" + esc(entry.getKey()) + "\"]=" + entry.getValue() + ";\n");
+        // Depth maps for filtering
+        sb.append("var DEPTH_BACK={};\n");
+        for (Map.Entry<String, Integer> entry : depthMapBack.entrySet()) {
+            sb.append("DEPTH_BACK[\"" + esc(entry.getKey()) + "\"]=" + entry.getValue() + ";\n");
+        }
+        sb.append("var DEPTH_FWD={};\n");
+        for (Map.Entry<String, Integer> entry : depthMapFwd.entrySet()) {
+            sb.append("DEPTH_FWD[\"" + esc(entry.getKey()) + "\"]=" + entry.getValue() + ";\n");
         }
         sb.append("\n");
 
         // Graph adjacency for re-expansion
-        sb.append("var ALL_GRAPH_FWD={};\nvar ALL_GRAPH_BCK={};\n");
+        sb.append("var ALL_GRAPH_FWD={};\nvar ALL_GRAPH_BCK={};\nvar ALL_NODES={};\n");
         for (String node : allNodes) {
             Set<String> fwd = graphForward.get(node);
             if (fwd != null && !fwd.isEmpty()) {
@@ -1302,9 +1220,6 @@ public class JobAnalyzer {
                 sb.append("];\n");
             }
         }
-
-        // All node metadata
-        sb.append("var ALL_NODES={};\n");
         for (String n : allNodes) {
             Job j = resolvedJobs.get(n);
             if (j != null) {
@@ -1318,138 +1233,24 @@ public class JobAnalyzer {
 
         sb.append("</script>\n\n");
 
-        // Three.js
         sb.append("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js\"></script>\n");
         sb.append("<script>\nif(typeof THREE==='undefined'){\n");
         sb.append("  document.body.innerHTML='<div style=\"color:#f44;padding:40px;font-family:monospace\">Error: No se pudo cargar Three.js.</div>';\n}\n</script>\n\n");
 
-        // Main script (tree version with depth controls)
         sb.append("<script>\n");
-        appendTreeRenderScript(sb);
+        appendMainScript(sb, true);
         sb.append("</script>\n</body>\n</html>\n");
 
         return sb.toString();
     }
 
     // =========================================================================
-    // HTML HELPERS
+    // MAIN THREE.JS RENDER SCRIPT (shared between general and tree viewer)
     // =========================================================================
-    private void appendViewerStyles(StringBuilder sb) {
-        sb.append("<style>\n");
-        sb.append("*{margin:0;padding:0;box-sizing:border-box;}\n");
-        sb.append("body{background:#000810;overflow:hidden;font-family:'Courier New',monospace;}\n");
-        sb.append("canvas{display:block;}\n");
-        sb.append("#info{position:absolute;top:10px;left:10px;color:#0fa;font-size:12px;background:rgba(0,0,20,0.85);padding:12px 16px;border-radius:8px;border:1px solid #0fa;pointer-events:none;z-index:10;line-height:1.6;}\n");
-        sb.append("#tooltip{position:absolute;display:none;color:#fff;background:rgba(0,5,30,0.95);border:1px solid #0af;padding:10px 14px;border-radius:6px;font-size:12px;pointer-events:none;z-index:20;max-width:450px;line-height:1.5;}\n");
-        sb.append("#tooltip b{color:#0fa;}\n");
-        sb.append("#legend{position:absolute;top:10px;right:10px;color:#ccc;font-size:11px;background:rgba(0,0,20,0.85);padding:12px;border-radius:8px;border:1px solid #335;z-index:10;line-height:1.8;}\n");
-        sb.append(".leg-item{display:flex;align-items:center;gap:8px;margin:2px 0;}\n");
-        sb.append(".leg-dot{width:12px;height:12px;border-radius:50%;border:1px solid rgba(255,255,255,0.3);}\n");
-        sb.append(".leg-line{width:24px;height:3px;border-radius:2px;}\n");
-        sb.append("#search-box{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:10;}\n");
-        sb.append("#search-box input{background:rgba(0,5,20,0.9);border:1px solid #0af;color:#fff;padding:8px 14px;border-radius:6px;font-family:'Courier New',monospace;width:320px;font-size:13px;}\n");
-        sb.append("#depth-controls{position:absolute;bottom:50px;left:50%;transform:translateX(-50%);z-index:10;background:rgba(0,5,20,0.9);border:1px solid #0af;padding:10px 16px;border-radius:6px;color:#ccc;font-size:12px;}\n");
-        sb.append("#depth-controls input[type=number]{background:#111;border:1px solid #444;color:#0fa;padding:4px 6px;border-radius:4px;font-family:'Courier New',monospace;}\n");
-        sb.append("#depth-controls button{background:#0af;color:#000;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:bold;font-family:'Courier New',monospace;}\n");
-        sb.append("#depth-controls button:hover{background:#0cf;}\n");
-        sb.append("#controls{position:absolute;bottom:10px;left:10px;color:#888;font-size:10px;background:rgba(0,0,20,0.7);padding:8px 12px;border-radius:6px;z-index:10;}\n");
-        sb.append("</style>\n");
-    }
-
-    private void appendLegend(StringBuilder sb) {
-        sb.append("<div id=\"legend\">\n");
-        sb.append("  <b style=\"color:#0fa\">&#9632; LEYENDA</b><br>\n");
-        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ff00ff;width:16px;height:16px;\"></div> <b>Semilla</b> (nodo grande)</div>\n");
-        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ffdd00\"></div> Inicial (sin predecesores)</div>\n");
-        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#4488ff\"></div> Final (sin sucesores)</div>\n");
-        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#00cc88\"></div> Normal</div>\n");
-        sb.append("  <hr style=\"border-color:#333;margin:4px 0\">\n");
-        sb.append("  <div class=\"leg-item\"><div class=\"leg-line\" style=\"background:#00cc66\"></div> Arista forward (+)</div>\n");
-        sb.append("  <div class=\"leg-item\"><div class=\"leg-line\" style=\"background:#ff6622\"></div> Arista backward (-)</div>\n");
-        sb.append("</div>\n");
-    }
-
-    private void appendDataSets(StringBuilder sb, Set<String> seedSet, Set<String> nodes) {
-        sb.append("var SEED_SET={");
-        { int si=0; for (String s : seedSet) { if(si>0) sb.append(","); sb.append("\""+esc(s)+"\":1"); si++; } }
-        sb.append("};\n");
-
-        sb.append("var INITIAL_SET={");
-        { int si=0; for (String s : initialSet) { if(nodes.contains(s)) { if(si>0) sb.append(","); sb.append("\""+esc(s)+"\":1"); si++; } } }
-        sb.append("};\n");
-
-        sb.append("var FINAL_SET={");
-        { int si=0; for (String s : finalSet) { if(nodes.contains(s)) { if(si>0) sb.append(","); sb.append("\""+esc(s)+"\":1"); si++; } } }
-        sb.append("};\n\n");
-    }
-
-    private void appendNodesJson(StringBuilder sb, Set<String> nodes) {
-        sb.append("var NODES=[\n");
-        int idx = 0;
-        for (String n : nodes) {
-            Job j = resolvedJobs.get(n);
-            int inC = j != null ? j.inCond.size() : 0;
-            int outC = j != null ? j.outCond.size() : 0;
-            String dc = j != null ? j.datacenter : "N/A";
-            String mem = j != null ? j.memname : "";
-            String isn = j != null ? j.isn : "";
-            if (idx > 0) sb.append(",\n");
-            sb.append("  {id:\"" + esc(n) + "\",inC:" + inC + ",outC:" + outC + ",dc:\"" + esc(dc) + "\",mem:\"" + esc(mem) + "\",isn:\"" + esc(isn) + "\"}");
-            idx++;
-        }
-        sb.append("\n];\n\n");
-    }
-
-    private void appendEdgesJson(StringBuilder sb, Map<String, String[]> edges) {
-        sb.append("var EDGES=[\n");
-        int ei = 0;
-        for (String[] e : edges.values()) {
-            if (ei > 0) sb.append(",\n");
-            sb.append("  {s:\"" + esc(e[0]) + "\",t:\"" + esc(e[1]) + "\",d:\"" + e[2] + "\"}");
-            ei++;
-        }
-        sb.append("\n];\n\n");
-    }
-
-    // =========================================================================
-    // THREE.JS RENDER SCRIPT (for general visor)
-    // =========================================================================
-    private void appendRenderScript(StringBuilder sb, boolean withDepthControls) {
+    private void appendMainScript(StringBuilder sb, boolean isTree) {
         sb.append("(function(){\n");
         sb.append("if(typeof THREE==='undefined') return;\n\n");
 
-        appendCommonRenderCode(sb);
-
-        // Depth control handler
-        if (withDepthControls) {
-            appendDepthControlHandler(sb, false);
-        }
-
-        sb.append("})();\n");
-    }
-
-    // =========================================================================
-    // THREE.JS RENDER SCRIPT (for tree visor)
-    // =========================================================================
-    private void appendTreeRenderScript(StringBuilder sb) {
-        sb.append("(function(){\n");
-        sb.append("if(typeof THREE==='undefined') return;\n\n");
-
-        // For tree, we start with ALL nodes and filter by depth
-        sb.append("var NODES=ALL_TREE_NODES;\nvar EDGES=ALL_TREE_EDGES;\n\n");
-
-        appendCommonRenderCode(sb);
-
-        // Depth control handler for tree
-        appendDepthControlHandler(sb, true);
-
-        sb.append("})();\n");
-    }
-
-    // =========================================================================
-    // COMMON RENDER CODE
-    // =========================================================================
-    private void appendCommonRenderCode(StringBuilder sb) {
         sb.append("var W=window.innerWidth, H=window.innerHeight;\n");
         sb.append("var scene=new THREE.Scene();\n");
         sb.append("scene.background=new THREE.Color(0x000810);\n");
@@ -1462,14 +1263,38 @@ public class JobAnalyzer {
         sb.append("var COL_SEED=0xff00ff, COL_INITIAL=0xffdd00, COL_FINAL=0x4488ff, COL_NORMAL=0x00cc88;\n");
         sb.append("var COL_EDGE_FWD=0x00cc66, COL_EDGE_BCK=0xff6622;\n\n");
 
-        sb.append("function getNodeColor(id){ if(SEED_SET[id]) return COL_SEED; if(INITIAL_SET[id]) return COL_INITIAL; if(FINAL_SET[id]) return COL_FINAL; return COL_NORMAL; }\n");
-        sb.append("function getNodeType(id){ if(SEED_SET[id]) return 'SEMILLA'; if(INITIAL_SET[id]) return 'INICIAL'; if(FINAL_SET[id]) return 'FINAL'; return 'NORMAL'; }\n");
-        sb.append("function getNodeSize(id,inC,outC){ if(SEED_SET[id]) return 6; return Math.max(1.5, Math.min(4.5, Math.log2(1+inC+outC))); }\n");
-        sb.append("function getLabelColor(id){ if(SEED_SET[id]) return '#ff88ff'; if(INITIAL_SET[id]) return '#ffee66'; if(FINAL_SET[id]) return '#6699ff'; return '#88ccaa'; }\n\n");
+        // Determine type dynamically based on graph context (not just global sets)
+        // For the viewer, we compute type based on whether a node has predecessors/successors
+        // among the VISIBLE nodes, but we label using the global classification to avoid confusion.
+        // Actually the user wants the GLOBAL classification. A job is initial if it has no
+        // predecessors in the resolved graph. The fact that it has inConds doesn't change this.
+        // We need to make sure we use INITIAL_SET/FINAL_SET which are global, but for the tree
+        // viewer they are tree-context.
+        sb.append("function getNodeColor(id){\n");
+        sb.append("  if(SEED_SET[id]) return COL_SEED;\n");
+        sb.append("  if(INITIAL_SET[id] && !SEED_SET[id]) return COL_INITIAL;\n");
+        sb.append("  if(FINAL_SET[id] && !SEED_SET[id]) return COL_FINAL;\n");
+        sb.append("  return COL_NORMAL;\n");
+        sb.append("}\n");
+        sb.append("function getNodeType(id){\n");
+        sb.append("  if(SEED_SET[id]) return 'SEMILLA';\n");
+        sb.append("  if(INITIAL_SET[id]) return 'INICIAL (sin predecesores en el grafo)';\n");
+        sb.append("  if(FINAL_SET[id]) return 'FINAL (sin sucesores en el grafo)';\n");
+        sb.append("  return 'NORMAL';\n");
+        sb.append("}\n");
+        sb.append("function getNodeSize(id,inC,outC){\n");
+        sb.append("  if(SEED_SET[id]) return 6;\n");
+        sb.append("  return Math.max(1.5, Math.min(4.5, Math.log2(1+inC+outC)));\n");
+        sb.append("}\n");
+        sb.append("function getLabelColor(id){\n");
+        sb.append("  if(SEED_SET[id]) return '#ff88ff';\n");
+        sb.append("  if(INITIAL_SET[id]) return '#ffee66';\n");
+        sb.append("  if(FINAL_SET[id]) return '#6699ff';\n");
+        sb.append("  return '#88ccaa';\n");
+        sb.append("}\n\n");
 
-        // buildScene function so we can rebuild on depth change
-        sb.append("var nodeMeshes=[], labelSprites=[], edgeLines=[], nodePositions={};\n");
-        sb.append("var currentNodes=NODES, currentEdges=EDGES;\n\n");
+        // Scene management
+        sb.append("var nodeMeshes=[], labelSprites=[], edgeLines=[], nodePositions={};\n\n");
 
         sb.append("function clearScene(){\n");
         sb.append("  for(var i=0;i<nodeMeshes.length;i++) scene.remove(nodeMeshes[i]);\n");
@@ -1496,13 +1321,13 @@ public class JobAnalyzer {
         sb.append("  return sprite;\n");
         sb.append("}\n\n");
 
+        // buildScene
         sb.append("function buildScene(nodes, edges){\n");
         sb.append("  clearScene();\n");
-        sb.append("  currentNodes=nodes; currentEdges=edges;\n");
         sb.append("  var N=nodes.length;\n");
         sb.append("  if(N===0) return;\n\n");
 
-        // Assign positions
+        // Position assignment
         sb.append("  var nodeMap={};\n");
         sb.append("  var spread=Math.max(300, Math.sqrt(N)*20);\n");
         sb.append("  for(var i=0;i<N;i++){\n");
@@ -1516,10 +1341,9 @@ public class JobAnalyzer {
         sb.append("    n.vx=0;n.vy=0;n.vz=0;\n");
         sb.append("    nodeMap[n.id]=n;\n");
         sb.append("  }\n");
-        // Center seed
         sb.append("  for(var key in SEED_SET){ if(nodeMap[key]){nodeMap[key].x=0;nodeMap[key].y=0;nodeMap[key].z=0;} }\n\n");
 
-        // Adjacency
+        // Adjacency for force layout
         sb.append("  var adj={};\n");
         sb.append("  for(var i=0;i<edges.length;i++){\n");
         sb.append("    var e=edges[i];\n");
@@ -1528,7 +1352,7 @@ public class JobAnalyzer {
         sb.append("    adj[e.s].push(e.t); adj[e.t].push(e.s);\n");
         sb.append("  }\n\n");
 
-        // Force layout
+        // Force-directed layout
         sb.append("  var ITERS=N>5000?60:N>1000?120:N>200?200:300;\n");
         sb.append("  var repK=N>5000?1200:N>1000?800:500;\n");
         sb.append("  var attrK=0.004, damp=0.88;\n");
@@ -1588,7 +1412,6 @@ public class JobAnalyzer {
         sb.append("    mesh.userData={id:n.id,type:getNodeType(n.id),inC:n.inC,outC:n.outC,dc:n.dc,mem:n.mem||'',isn:n.isn||'',origColor:col};\n");
         sb.append("    scene.add(mesh); nodeMeshes.push(mesh);\n");
         sb.append("    nodePositions[n.id]=mesh.position;\n");
-        // Label
         sb.append("    var lbl=makeTextSprite(n.id, getLabelColor(n.id), SEED_SET[n.id]?36:24);\n");
         sb.append("    lbl.position.set(n.x, n.y+sz+2, n.z);\n");
         sb.append("    scene.add(lbl); labelSprites.push(lbl);\n");
@@ -1609,14 +1432,11 @@ public class JobAnalyzer {
 
         sb.append("  spherical.radius=spread*1.8;\n");
         sb.append("  updateCamera();\n");
-
-        // Update counters
         sb.append("  var nc=document.getElementById('nodeCount'); if(nc) nc.textContent=N;\n");
         sb.append("  var ec=document.getElementById('edgeCount'); if(ec) ec.textContent=edges.length;\n");
-
         sb.append("}\n\n"); // end buildScene
 
-        // Camera
+        // Camera (orbital)
         sb.append("var spherical={theta:0,phi:Math.PI/2,radius:800};\n");
         sb.append("var target=new THREE.Vector3(0,0,0);\n");
         sb.append("function updateCamera(){\n");
@@ -1626,24 +1446,59 @@ public class JobAnalyzer {
         sb.append("  camera.lookAt(target);\n");
         sb.append("}\n\n");
 
-        // Mouse
-        sb.append("var isDragging=false,prevMX=0,prevMY=0;\n");
-        sb.append("renderer.domElement.addEventListener('mousedown',function(ev){ if(ev.button===0){isDragging=true;prevMX=ev.clientX;prevMY=ev.clientY;} });\n");
+        // Mouse controls:
+        // Left click (button 0) = rotate
+        // Middle click (button 1) = pan (move)
+        // Scroll = zoom
+        sb.append("var isRotating=false, isPanning=false, prevMX=0, prevMY=0;\n\n");
+
+        sb.append("renderer.domElement.addEventListener('mousedown',function(ev){\n");
+        sb.append("  if(ev.button===0){ isRotating=true; prevMX=ev.clientX; prevMY=ev.clientY; }\n");
+        sb.append("  if(ev.button===1){ isPanning=true; prevMX=ev.clientX; prevMY=ev.clientY; ev.preventDefault(); }\n");
+        sb.append("});\n\n");
+
         sb.append("renderer.domElement.addEventListener('mousemove',function(ev){\n");
-        sb.append("  if(isDragging){\n");
+        sb.append("  if(isRotating){\n");
         sb.append("    spherical.theta-=(ev.clientX-prevMX)*0.005;\n");
         sb.append("    spherical.phi=Math.max(0.05,Math.min(Math.PI-0.05,spherical.phi-(ev.clientY-prevMY)*0.005));\n");
-        sb.append("    prevMX=ev.clientX;prevMY=ev.clientY; updateCamera();\n");
-        sb.append("  }\n  checkHover(ev);\n});\n");
-        sb.append("renderer.domElement.addEventListener('mouseup',function(){isDragging=false;});\n");
+        sb.append("    prevMX=ev.clientX; prevMY=ev.clientY;\n");
+        sb.append("    updateCamera();\n");
+        sb.append("  }\n");
+        sb.append("  if(isPanning){\n");
+        // Pan: move target based on mouse delta, projected onto camera's right and up vectors
+        sb.append("    var dx=(ev.clientX-prevMX)*spherical.radius*0.002;\n");
+        sb.append("    var dy=(ev.clientY-prevMY)*spherical.radius*0.002;\n");
+        sb.append("    var right=new THREE.Vector3();\n");
+        sb.append("    var up=new THREE.Vector3();\n");
+        sb.append("    camera.getWorldDirection(new THREE.Vector3());\n");
+        sb.append("    right.crossVectors(camera.up, new THREE.Vector3().subVectors(target,camera.position).normalize()).normalize();\n");
+        sb.append("    up.copy(camera.up);\n");
+        sb.append("    target.add(right.multiplyScalar(-dx));\n");
+        sb.append("    target.add(up.multiplyScalar(dy));\n");
+        sb.append("    prevMX=ev.clientX; prevMY=ev.clientY;\n");
+        sb.append("    updateCamera();\n");
+        sb.append("  }\n");
+        sb.append("  checkHover(ev);\n");
+        sb.append("});\n\n");
+
+        sb.append("renderer.domElement.addEventListener('mouseup',function(ev){\n");
+        sb.append("  if(ev.button===0) isRotating=false;\n");
+        sb.append("  if(ev.button===1) isPanning=false;\n");
+        sb.append("});\n\n");
+
+        // Prevent default on middle click to avoid scroll behavior
+        sb.append("renderer.domElement.addEventListener('auxclick',function(ev){ if(ev.button===1) ev.preventDefault(); });\n");
+        sb.append("renderer.domElement.addEventListener('contextmenu',function(ev){ ev.preventDefault(); });\n\n");
+
         sb.append("renderer.domElement.addEventListener('wheel',function(ev){\n");
         sb.append("  spherical.radius=Math.max(10,spherical.radius*(ev.deltaY>0?1.1:0.9));\n");
         sb.append("  updateCamera(); ev.preventDefault();\n},{passive:false});\n\n");
 
-        // Hover tooltip with full info
+        // Hover tooltip
         sb.append("var raycaster=new THREE.Raycaster();\n");
         sb.append("var mouseVec=new THREE.Vector2();\n");
         sb.append("var tooltip=document.getElementById('tooltip');\n\n");
+
         sb.append("function checkHover(ev){\n");
         sb.append("  mouseVec.x=(ev.clientX/W)*2-1; mouseVec.y=-(ev.clientY/H)*2+1;\n");
         sb.append("  raycaster.setFromCamera(mouseVec,camera);\n");
@@ -1681,95 +1536,81 @@ public class JobAnalyzer {
         sb.append("window.addEventListener('resize',function(){ W=window.innerWidth;H=window.innerHeight; camera.aspect=W/H;camera.updateProjectionMatrix(); renderer.setSize(W,H); });\n\n");
 
         // Animate
-        sb.append("function animate(){ requestAnimationFrame(animate); renderer.render(scene,camera); }\n");
+        sb.append("function animate(){ requestAnimationFrame(animate); renderer.render(scene,camera); }\n\n");
 
-        // Initial build
-        sb.append("buildScene(NODES, EDGES);\n");
-        sb.append("animate();\n\n");
-    }
-
-    // =========================================================================
-    // DEPTH CONTROL HANDLER (general visor)
-    // =========================================================================
-    private void appendDepthControlHandler(StringBuilder sb, boolean isTree) {
-        sb.append("var btnApply=document.getElementById('btnApplyDepth');\n");
-        sb.append("if(btnApply) btnApply.addEventListener('click', function(){\n");
+        // Depth control handler
+        sb.append("document.getElementById('btnApplyDepth').addEventListener('click', function(){\n");
         sb.append("  var depthBack=parseInt(document.getElementById('depthBack').value)||0;\n");
         sb.append("  var depthFwd=parseInt(document.getElementById('depthFwd').value)||0;\n");
-        sb.append("  console.log('Aplicando profundidad: -'+depthBack+' / +'+depthFwd);\n\n");
+        sb.append("  console.log('Aplicando profundidad: atras='+depthBack+' adelante='+depthFwd);\n\n");
 
-        // BFS in JavaScript to recompute visible nodes/edges
         sb.append("  var seeds=[];\n");
         sb.append("  for(var k in SEED_SET) seeds.push(k);\n\n");
 
         sb.append("  var visibleNodes={};\n");
         sb.append("  for(var si=0;si<seeds.length;si++) visibleNodes[seeds[si]]=true;\n\n");
 
-        // BFS Forward
-        sb.append("  // BFS Forward\n");
-        sb.append("  var queue=seeds.slice(), visited={};\n");
-        sb.append("  for(var si=0;si<seeds.length;si++) visited[seeds[si]]=0;\n");
-        sb.append("  while(queue.length>0){\n");
-        sb.append("    var cur=queue.shift(); var d=visited[cur];\n");
+        // BFS Forward from seeds
+        sb.append("  var visitedFwd={};\n");
+        sb.append("  var queueFwd=seeds.slice();\n");
+        sb.append("  for(var si=0;si<seeds.length;si++) visitedFwd[seeds[si]]=0;\n");
+        sb.append("  while(queueFwd.length>0){\n");
+        sb.append("    var cur=queueFwd.shift(); var d=visitedFwd[cur];\n");
         sb.append("    if(d<depthFwd){\n");
         sb.append("      var nexts=ALL_GRAPH_FWD[cur]||[];\n");
         sb.append("      for(var ni=0;ni<nexts.length;ni++){\n");
-        sb.append("        if(visited[nexts[ni]]===undefined){\n");
-        sb.append("          visited[nexts[ni]]=d+1;\n");
+        sb.append("        if(visitedFwd[nexts[ni]]===undefined){\n");
+        sb.append("          visitedFwd[nexts[ni]]=d+1;\n");
         sb.append("          visibleNodes[nexts[ni]]=true;\n");
-        sb.append("          queue.push(nexts[ni]);\n");
+        sb.append("          queueFwd.push(nexts[ni]);\n");
         sb.append("        }\n");
         sb.append("      }\n");
         sb.append("    }\n");
         sb.append("  }\n\n");
 
-        // BFS Backward
-        sb.append("  // BFS Backward\n");
-        sb.append("  queue=seeds.slice(); var visitedB={};\n");
-        sb.append("  for(var si=0;si<seeds.length;si++) visitedB[seeds[si]]=0;\n");
-        sb.append("  while(queue.length>0){\n");
-        sb.append("    var cur=queue.shift(); var d=visitedB[cur];\n");
+        // BFS Backward from seeds
+        sb.append("  var visitedBck={};\n");
+        sb.append("  var queueBck=seeds.slice();\n");
+        sb.append("  for(var si=0;si<seeds.length;si++) visitedBck[seeds[si]]=0;\n");
+        sb.append("  while(queueBck.length>0){\n");
+        sb.append("    var cur=queueBck.shift(); var d=visitedBck[cur];\n");
         sb.append("    if(d<depthBack){\n");
         sb.append("      var preds=ALL_GRAPH_BCK[cur]||[];\n");
         sb.append("      for(var ni=0;ni<preds.length;ni++){\n");
-        sb.append("        if(visitedB[preds[ni]]===undefined){\n");
-        sb.append("          visitedB[preds[ni]]=d+1;\n");
+        sb.append("        if(visitedBck[preds[ni]]===undefined){\n");
+        sb.append("          visitedBck[preds[ni]]=d+1;\n");
         sb.append("          visibleNodes[preds[ni]]=true;\n");
-        sb.append("          queue.push(preds[ni]);\n");
+        sb.append("          queueBck.push(preds[ni]);\n");
         sb.append("        }\n");
         sb.append("      }\n");
         sb.append("    }\n");
         sb.append("  }\n\n");
 
-        // Collect backward-only nodes for edge coloring
+        // Determine backward-only nodes for edge coloring
         sb.append("  var backwardOnlyNodes={};\n");
-        sb.append("  for(var k in visitedB){ if(visited[k]===undefined && !SEED_SET[k]) backwardOnlyNodes[k]=true; }\n\n");
+        sb.append("  for(var k in visitedBck){ if(visitedFwd[k]===undefined && !SEED_SET[k]) backwardOnlyNodes[k]=true; }\n\n");
 
-        // Build filtered nodes array
-        if (isTree) {
-            sb.append("  var filteredNodes=[];\n");
-            sb.append("  for(var i=0;i<ALL_TREE_NODES.length;i++){\n");
-            sb.append("    if(visibleNodes[ALL_TREE_NODES[i].id]) filteredNodes.push(ALL_TREE_NODES[i]);\n");
-            sb.append("  }\n");
-        } else {
-            sb.append("  var filteredNodes=[];\n");
-            sb.append("  for(var k in visibleNodes){\n");
-            sb.append("    var meta=ALL_NODES[k];\n");
-            sb.append("    if(meta) filteredNodes.push({id:k,inC:meta.inC,outC:meta.outC,dc:meta.dc,mem:meta.mem,isn:meta.isn||''});\n");
-            sb.append("    else filteredNodes.push({id:k,inC:0,outC:0,dc:'N/A',mem:'',isn:''});\n");
-            sb.append("  }\n");
-        }
+        // Build filtered nodes
+        sb.append("  var filteredNodes=[];\n");
+        sb.append("  for(var k in visibleNodes){\n");
+        sb.append("    var meta=ALL_NODES[k];\n");
+        sb.append("    if(meta) filteredNodes.push({id:k,inC:meta.inC,outC:meta.outC,dc:meta.dc,mem:meta.mem||'',isn:meta.isn||''});\n");
+        sb.append("    else filteredNodes.push({id:k,inC:0,outC:0,dc:'N/A',mem:'',isn:''});\n");
+        sb.append("  }\n\n");
 
         // Build filtered edges
         sb.append("  var filteredEdges=[];\n");
-        sb.append("  // Add forward edges\n");
+        sb.append("  var edgeSeen={};\n");
         sb.append("  for(var k in visibleNodes){\n");
         sb.append("    var fwd=ALL_GRAPH_FWD[k]||[];\n");
         sb.append("    for(var fi=0;fi<fwd.length;fi++){\n");
         sb.append("      if(visibleNodes[fwd[fi]]){\n");
-        sb.append("        var dir=(backwardOnlyNodes[k]&&backwardOnlyNodes[fwd[fi]])?'bck':\n");
-        sb.append("               (backwardOnlyNodes[k]&&SEED_SET[fwd[fi]])?'bck':'fwd';\n");
-        sb.append("        filteredEdges.push({s:k,t:fwd[fi],d:dir});\n");
+        sb.append("        var ek=k+'|'+fwd[fi];\n");
+        sb.append("        if(!edgeSeen[ek]){\n");
+        sb.append("          edgeSeen[ek]=true;\n");
+        sb.append("          var dir=(backwardOnlyNodes[k]&&(backwardOnlyNodes[fwd[fi]]||SEED_SET[fwd[fi]]))?'bck':'fwd';\n");
+        sb.append("          filteredEdges.push({s:k,t:fwd[fi],d:dir});\n");
+        sb.append("        }\n");
         sb.append("      }\n");
         sb.append("    }\n");
         sb.append("  }\n\n");
@@ -1777,10 +1618,84 @@ public class JobAnalyzer {
         sb.append("  console.log('Filtered: '+filteredNodes.length+' nodos, '+filteredEdges.length+' aristas');\n");
         sb.append("  buildScene(filteredNodes, filteredEdges);\n");
         sb.append("});\n\n");
+
+        // Initial build
+        sb.append("buildScene(NODES, EDGES);\n");
+        sb.append("animate();\n\n");
+
+        sb.append("})();\n");
     }
 
     // =========================================================================
-    // BFS BIDIRECCIONAL (usado por visor general)
+    // HTML HELPERS
+    // =========================================================================
+    private void appendViewerStyles(StringBuilder sb) {
+        sb.append("<style>\n");
+        sb.append("*{margin:0;padding:0;box-sizing:border-box;}\n");
+        sb.append("body{background:#000810;overflow:hidden;font-family:'Courier New',monospace;}\n");
+        sb.append("canvas{display:block;}\n");
+        sb.append("#info{position:absolute;top:10px;left:10px;color:#0fa;font-size:12px;background:rgba(0,0,20,0.85);padding:12px 16px;border-radius:8px;border:1px solid #0fa;pointer-events:none;z-index:10;line-height:1.6;}\n");
+        sb.append("#tooltip{position:absolute;display:none;color:#fff;background:rgba(0,5,30,0.95);border:1px solid #0af;padding:10px 14px;border-radius:6px;font-size:12px;pointer-events:none;z-index:20;max-width:450px;line-height:1.5;}\n");
+        sb.append("#tooltip b{color:#0fa;}\n");
+        sb.append("#legend{position:absolute;top:10px;right:10px;color:#ccc;font-size:11px;background:rgba(0,0,20,0.85);padding:12px;border-radius:8px;border:1px solid #335;z-index:10;line-height:1.8;}\n");
+        sb.append(".leg-item{display:flex;align-items:center;gap:8px;margin:2px 0;}\n");
+        sb.append(".leg-dot{width:12px;height:12px;border-radius:50%;border:1px solid rgba(255,255,255,0.3);}\n");
+        sb.append(".leg-line{width:24px;height:3px;border-radius:2px;}\n");
+        sb.append("#search-box{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:10;}\n");
+        sb.append("#search-box input{background:rgba(0,5,20,0.9);border:1px solid #0af;color:#fff;padding:8px 14px;border-radius:6px;font-family:'Courier New',monospace;width:320px;font-size:13px;}\n");
+        sb.append("#depth-controls{position:absolute;bottom:50px;left:50%;transform:translateX(-50%);z-index:10;background:rgba(0,5,20,0.9);border:1px solid #0af;padding:10px 16px;border-radius:6px;color:#ccc;font-size:12px;}\n");
+        sb.append("#depth-controls input[type=number]{background:#111;border:1px solid #444;color:#0fa;padding:4px 6px;border-radius:4px;font-family:'Courier New',monospace;}\n");
+        sb.append("#depth-controls button{background:#0af;color:#000;border:none;padding:6px 14px;border-radius:4px;cursor:pointer;font-weight:bold;font-family:'Courier New',monospace;}\n");
+        sb.append("#depth-controls button:hover{background:#0cf;}\n");
+        sb.append("#controls{position:absolute;bottom:10px;left:10px;color:#888;font-size:10px;background:rgba(0,0,20,0.7);padding:8px 12px;border-radius:6px;z-index:10;}\n");
+        sb.append("</style>\n");
+    }
+
+    private void appendLegend(StringBuilder sb) {
+        sb.append("<div id=\"legend\">\n");
+        sb.append("  <b style=\"color:#0fa\">&#9632; LEYENDA</b><br>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ff00ff;width:16px;height:16px;\"></div> <b>Semilla</b> (nodo grande)</div>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ffdd00\"></div> Inicial (sin predecesores en grafo)</div>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#4488ff\"></div> Final (sin sucesores en grafo)</div>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#00cc88\"></div> Normal</div>\n");
+        sb.append("  <hr style=\"border-color:#333;margin:4px 0\">\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-line\" style=\"background:#00cc66\"></div> Arista forward (adelante)</div>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-line\" style=\"background:#ff6622\"></div> Arista backward (atras)</div>\n");
+        sb.append("  <hr style=\"border-color:#333;margin:4px 0\">\n");
+        sb.append("  <div style=\"font-size:9px;color:#888;max-width:200px;line-height:1.3;\">Un job INICIAL puede tener inConds &gt; 0 si todas sus condiciones de entrada estan ROTAS (nadie las produce).</div>\n");
+        sb.append("</div>\n");
+    }
+
+    private void appendNodesJson(StringBuilder sb, Set<String> nodes) {
+        sb.append("var NODES=[\n");
+        int idx = 0;
+        for (String n : nodes) {
+            Job j = resolvedJobs.get(n);
+            int inC = j != null ? j.inCond.size() : 0;
+            int outC = j != null ? j.outCond.size() : 0;
+            String dc = j != null ? j.datacenter : "N/A";
+            String mem = j != null ? j.memname : "";
+            String isn = j != null ? j.isn : "";
+            if (idx > 0) sb.append(",\n");
+            sb.append("  {id:\"" + esc(n) + "\",inC:" + inC + ",outC:" + outC + ",dc:\"" + esc(dc) + "\",mem:\"" + esc(mem) + "\",isn:\"" + esc(isn) + "\"}");
+            idx++;
+        }
+        sb.append("\n];\n\n");
+    }
+
+    private void appendEdgesJson(StringBuilder sb, Map<String, String[]> edges) {
+        sb.append("var EDGES=[\n");
+        int ei = 0;
+        for (String[] e : edges.values()) {
+            if (ei > 0) sb.append(",\n");
+            sb.append("  {s:\"" + esc(e[0]) + "\",t:\"" + esc(e[1]) + "\",d:\"" + e[2] + "\"}");
+            ei++;
+        }
+        sb.append("\n];\n\n");
+    }
+
+    // =========================================================================
+    // BFS BIDIRECCIONAL (para visor general)
     // =========================================================================
     static class BfsResult {
         Set<String> nodes = new LinkedHashSet<>();
@@ -1790,9 +1705,12 @@ public class JobAnalyzer {
     private BfsResult bfsBidirectional(Set<String> seedSet, int depth) {
         BfsResult result = new BfsResult();
 
-        // Forward
+        // Track which nodes are found only via backward BFS (for edge coloring)
+        Set<String> forwardVisited = new HashSet<>(seedSet);
+        Set<String> backwardOnly = new HashSet<>();
+
+        // Forward BFS
         {
-            Set<String> visited = new HashSet<>(seedSet);
             Queue<String[]> queue = new LinkedList<>();
             for (String s : seedSet) {
                 queue.add(new String[]{s, "0"});
@@ -1802,7 +1720,6 @@ public class JobAnalyzer {
                 String[] cur = queue.poll();
                 String jn = cur[0];
                 int d = Integer.parseInt(cur[1]);
-                result.nodes.add(jn);
                 if (d < depth) {
                     Set<String> nexts = graphForward.get(jn);
                     if (nexts != null) {
@@ -1810,8 +1727,8 @@ public class JobAnalyzer {
                             String ek = jn + "|" + next;
                             if (!result.edges.containsKey(ek))
                                 result.edges.put(ek, new String[]{jn, next, "fwd"});
-                            if (!visited.contains(next)) {
-                                visited.add(next);
+                            if (!forwardVisited.contains(next)) {
+                                forwardVisited.add(next);
                                 result.nodes.add(next);
                                 queue.add(new String[]{next, String.valueOf(d + 1)});
                             }
@@ -1821,7 +1738,7 @@ public class JobAnalyzer {
             }
         }
 
-        // Backward
+        // Backward BFS
         {
             Set<String> visited = new HashSet<>(seedSet);
             Queue<String[]> queue = new LinkedList<>();
@@ -1830,7 +1747,6 @@ public class JobAnalyzer {
                 String[] cur = queue.poll();
                 String jn = cur[0];
                 int d = Integer.parseInt(cur[1]);
-                result.nodes.add(jn);
                 if (d < depth) {
                     Set<String> preds = graphBackward.get(jn);
                     if (preds != null) {
@@ -1841,11 +1757,21 @@ public class JobAnalyzer {
                             if (!visited.contains(pred)) {
                                 visited.add(pred);
                                 result.nodes.add(pred);
+                                if (!forwardVisited.contains(pred))
+                                    backwardOnly.add(pred);
                                 queue.add(new String[]{pred, String.valueOf(d + 1)});
                             }
                         }
                     }
                 }
+            }
+        }
+
+        // Fix edge directions: edges between two backward-only nodes should be "bck"
+        for (Map.Entry<String, String[]> entry : result.edges.entrySet()) {
+            String[] e = entry.getValue();
+            if (backwardOnly.contains(e[0]) && (backwardOnly.contains(e[1]) || seedSet.contains(e[1]))) {
+                e[2] = "bck";
             }
         }
 

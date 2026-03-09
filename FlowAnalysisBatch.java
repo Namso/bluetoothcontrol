@@ -1,4 +1,3 @@
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedWriter;
@@ -13,7 +12,6 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -46,7 +44,6 @@ public class FlowAnalysisBatch {
         writeLists(dir, result);
         writeHtmlReport(dir, result, elapsed, jsonPath, seedJob);
         writeMainPathReport(dir, result);
-
         if (seedJob.length() > 0) {
             writeSeedTreeReport(dir, result, seedJob);
         }
@@ -127,101 +124,23 @@ public class FlowAnalysisBatch {
     }
 
     private static void writeHtmlReport(File dir, FlowAnalyzer.AnalysisResult result, long elapsed, String sourcePath, String seedJob) throws Exception {
-        JSONObject data = result.toJson();
-        String json = data.toString();
-
+        String json = result.toJson().toString();
         StringBuilder html = new StringBuilder();
-        html.append("<!doctype html>\n");
-        html.append("<html lang=\"es\">\n");
-        html.append("<head>\n");
-        html.append("<meta charset=\"UTF-8\"/>\n");
-        html.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n");
-        html.append("<title>Reporte de Malla</title>\n");
-        html.append("<style>");
-        html.append("body{margin:0;font-family:Arial,sans-serif;background:#0b1220;color:#e5e7eb;} ");
-        html.append(".wrap{max-width:1300px;margin:0 auto;padding:18px;} ");
-        html.append("h1,h2{margin:0 0 10px 0;} ");
-        html.append(".muted{color:#9ca3af;} ");
-        html.append(".grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0;} ");
-        html.append(".box{border:1px solid #263449;padding:10px;background:#111a2b;} ");
-        html.append(".row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;} ");
-        html.append("input,button{background:#0f172a;color:#e5e7eb;border:1px solid #334155;padding:7px 8px;} ");
-        html.append("button{cursor:pointer;} ");
-        html.append("#graphWrap{position:relative;} ");
-        html.append("canvas{width:100%;height:620px;display:block;border:1px solid #263449;background:#060b15;} ");
-        html.append(".tooltip{position:absolute;display:none;pointer-events:none;background:#020617;color:#e2e8f0;border:1px solid #334155;padding:4px 6px;font-size:12px;white-space:nowrap;} ");
-        html.append("ul{margin:6px 0 0 18px;padding:0;max-height:220px;overflow:auto;} ");
-        html.append("li{margin:2px 0;} ");
-        html.append("@media(max-width:1100px){.grid{grid-template-columns:1fr;}} ");
-        html.append("</style>\n");
-        html.append("</head>\n");
-        html.append("<body>\n");
-        html.append("<div class=\"wrap\">\n");
-        html.append("<h1>Reporte Completo de Dependencias</h1>\n");
-        html.append("<p class=\"muted\">Fuente: ").append(escapeHtml(sourcePath)).append(" | Tiempo: ").append(elapsed).append(" ms</p>\n");
-        html.append("<div class=\"grid\" id=\"stats\"></div>\n");
-        html.append("<div class=\"box\">\n");
-        html.append("<h2>Malla completa (render incremental)</h2>\n");
-        html.append("<p class=\"muted\">Con job semilla puedes explorar hacia atras (profundidad negativa) y hacia adelante (profundidad positiva).</p>\n");
-        html.append("<p class=\"muted\">Colores: semilla rojo, final azul, iniciador amarillo, normal celeste, inicial+final cian, arista negativa violeta.</p>\n");
-        html.append("<div class=\"row\">\n");
-        html.append("<label>Job semilla:</label><input id=\"seed\" type=\"text\" size=\"18\" value=\"").append(escapeHtml(seedJob)).append("\"/>\n");
-        html.append("<label>Desde profundidad:</label><input id=\"depthFrom\" type=\"number\" value=\"-2\" min=\"-20\" max=\"0\"/>\n");
-        html.append("<label>Hasta profundidad:</label><input id=\"depthTo\" type=\"number\" value=\"3\" min=\"0\" max=\"20\"/>\n");
-        html.append("<label>Max nodos:</label><input id=\"maxNodes\" type=\"number\" value=\"800\" min=\"50\" max=\"5000\"/>\n");
-        html.append("<button id=\"renderBtn\">Renderizar</button>\n");
-        html.append("</div>\n");
-        html.append("<div id=\"graphWrap\">\n");
-        html.append("<canvas id=\"graph\" width=\"1280\" height=\"620\"></canvas>\n");
-        html.append("<div class=\"tooltip\" id=\"nodeTooltip\"></div>\n");
-        html.append("</div>\n");
-        html.append("</div>\n");
-        html.append("<div class=\"grid\">\n");
-        html.append("<div class=\"box\"><h2>Iniciadores</h2><ul id=\"starters\"></ul></div>\n");
-        html.append("<div class=\"box\"><h2>Finales</h2><ul id=\"finals\"></ul></div>\n");
-        html.append("<div class=\"box\"><h2>Condiciones faltantes</h2><ul id=\"missing\"></ul></div>\n");
-        html.append("</div>\n");
-        html.append("</div>\n");
-        html.append("<script>\n");
-        html.append("const DATA=").append(json).append(";\n");
-        html.append("const stats=[['Jobs leidos',DATA.totalJobsRead],['Canonicos',DATA.canonicalCount],['Iniciadores',DATA.totalStarters],['Finales',DATA.totalFinals],['Rotas',DATA.totalBrokenReferences],['Faltantes',DATA.totalMissingJobs],['Nodos',DATA.mapNodes.length],['Aristas',DATA.mapEdges.length]];\n");
-        html.append("const statsEl=document.getElementById('stats');stats.forEach(s=>{const d=document.createElement('div');d.className='box';d.textContent=s[0]+': '+s[1];statsEl.appendChild(d);});\n");
-        html.append("function fill(id,arr,max){const el=document.getElementById(id);arr.slice(0,max).forEach(v=>{const li=document.createElement('li');li.textContent=typeof v==='string'?v:(v.jobname+' | '+v.condition+' | '+v.expectedFrom);el.appendChild(li);});}\n");
-        html.append("fill('starters',DATA.starters,1500);fill('finals',DATA.finals,1500);fill('missing',DATA.missingJobs,1500);\n");
-        html.append("const graph=document.getElementById('graph');const ctx=graph.getContext('2d');const tooltip=document.getElementById('nodeTooltip');\n");
-        html.append("const startersSet=new Set(DATA.starters);const finalsSet=new Set(DATA.finals);\n");
-        html.append("const outMap=new Map();const inMap=new Map();DATA.mapEdges.forEach(e=>{if(!outMap.has(e.source))outMap.set(e.source,[]);outMap.get(e.source).push(e.target);if(!inMap.has(e.target))inMap.set(e.target,[]);inMap.get(e.target).push(e.source);});\n");
-        html.append("function buildSubset(seed,depthFrom,depthTo,maxNodes){const hasSeed=seed&&seed.length>0&&DATA.mapNodes.indexOf(seed)>=0;const backwardLimit=Math.abs(Math.min(0,depthFrom));const forwardLimit=Math.max(0,depthTo);const nodeSet=new Set();const nodeDepth=new Map();const backwardEdgeSet=new Set();if(hasSeed){nodeSet.add(seed);nodeDepth.set(seed,0);const fQueue=[{n:seed,d:0}];const fBest=new Map();fBest.set(seed,0);while(fQueue.length&&nodeSet.size<maxNodes){const cur=fQueue.shift();if(cur.d>=forwardLimit)continue;const next=outMap.get(cur.n)||[];for(let i=0;i<next.length;i++){const to=next[i];const nd=cur.d+1;const prev=fBest.get(to);if(prev!==undefined&&prev<=nd)continue;fBest.set(to,nd);if(!nodeSet.has(to)&&nodeSet.size<maxNodes)nodeSet.add(to);const oldDepth=nodeDepth.get(to);if(oldDepth===undefined||Math.abs(nd)<Math.abs(oldDepth))nodeDepth.set(to,nd);fQueue.push({n:to,d:nd});if(nodeSet.size+fQueue.length>=maxNodes)break;}}const bQueue=[{n:seed,d:0}];const bBest=new Map();bBest.set(seed,0);while(bQueue.length&&nodeSet.size<maxNodes){const cur=bQueue.shift();if(cur.d>=backwardLimit)continue;const prevNodes=inMap.get(cur.n)||[];for(let i=0;i<prevNodes.length;i++){const from=prevNodes[i];const nd=cur.d+1;const prev=bBest.get(from);if(prev!==undefined&&prev<=nd)continue;bBest.set(from,nd);if(!nodeSet.has(from)&&nodeSet.size<maxNodes)nodeSet.add(from);const signedDepth=-nd;const oldDepth=nodeDepth.get(from);if(oldDepth===undefined||Math.abs(signedDepth)<Math.abs(oldDepth)||oldDepth>0)nodeDepth.set(from,signedDepth);backwardEdgeSet.add(from+'->'+cur.n);bQueue.push({n:from,d:nd});if(nodeSet.size+bQueue.length>=maxNodes)break;}}}else{const q=[];for(let i=0;i<DATA.starters.length&&i<50;i++)q.push({n:DATA.starters[i],d:0});if(q.length===0&&DATA.mapNodes.length>0)q.push({n:DATA.mapNodes[0],d:0});while(q.length&&nodeSet.size<maxNodes){const cur=q.shift();if(nodeSet.has(cur.n)||cur.d>forwardLimit)continue;nodeSet.add(cur.n);nodeDepth.set(cur.n,cur.d);const outs=outMap.get(cur.n)||[];for(let i=0;i<outs.length;i++){if(!nodeSet.has(outs[i]))q.push({n:outs[i],d:cur.d+1});if(nodeSet.size+q.length>=maxNodes)break;}}}const nodes=[...nodeSet];const edges=[];for(let i=0;i<DATA.mapEdges.length;i++){const e=DATA.mapEdges[i];if(nodeSet.has(e.source)&&nodeSet.has(e.target)){const key=e.source+'->'+e.target;edges.push({source:e.source,target:e.target,isBackward:backwardEdgeSet.has(key)});}}return {nodes,edges,nodeDepth,seed:hasSeed?seed:''};}\n");
-        html.append("let current={nodes:[],edges:[],pos:new Map(),nodeDepth:new Map(),seed:''};let view={offsetX:40,offsetY:40,scale:1};let dragNode='';let isPanning=false;let lastX=0;let lastY=0;\n");
-        html.append("function toScreen(p){return{x:p.x*view.scale+view.offsetX,y:p.y*view.scale+view.offsetY};}\n");
-        html.append("function toWorld(x,y){return{x:(x-view.offsetX)/view.scale,y:(y-view.offsetY)/view.scale};}\n");
-        html.append("function buildLayout(subset){const n=subset.nodes.length;const pos=new Map();const cols=Math.max(2,Math.floor(Math.sqrt(n)));for(let i=0;i<n;i++){const c=i%cols;const r=Math.floor(i/cols);const x=80+(c/(cols-1||1))*1000+(Math.random()*14-7);const y=70+(r/(Math.ceil(n/cols)-1||1))*500+(Math.random()*14-7);pos.set(subset.nodes[i],{x:x,y:y,vx:0,vy:0});}for(let step=0;step<120;step++){for(let i=0;i<subset.nodes.length;i++){const a=pos.get(subset.nodes[i]);for(let j=i+1;j<subset.nodes.length;j++){const b=pos.get(subset.nodes[j]);let dx=a.x-b.x;let dy=a.y-b.y;let dist=Math.sqrt(dx*dx+dy*dy)+0.1;let f=2600/(dist*dist);a.vx+=dx/dist*f;b.vx-=dx/dist*f;a.vy+=dy/dist*f;b.vy-=dy/dist*f;}}for(let i=0;i<subset.edges.length;i++){const e=subset.edges[i];const a=pos.get(e.source);const b=pos.get(e.target);let dx=b.x-a.x;let dy=b.y-a.y;let dist=Math.sqrt(dx*dx+dy*dy)+0.1;let stretch=(dist-75)*0.02;a.vx+=dx/dist*stretch;a.vy+=dy/dist*stretch;b.vx-=dx/dist*stretch;b.vy-=dy/dist*stretch;}subset.nodes.forEach(name=>{const p=pos.get(name);p.vx*=0.84;p.vy*=0.84;p.x=Math.max(10,Math.min(1200,p.x+p.vx));p.y=Math.max(10,Math.min(580,p.y+p.vy));});}return pos;}\n");
-        html.append("function nodeRadius(name){return name===current.seed?8.5:4.5;}\n");
-        html.append("function nodeColor(name){if(name===current.seed)return '#ef4444';const isStart=startersSet.has(name);const isFinal=finalsSet.has(name);if(isStart&&isFinal)return '#22d3ee';if(isFinal)return '#60a5fa';if(isStart)return '#facc15';return '#93c5fd';}\n");
-        html.append("function nodeType(name){if(name===current.seed)return 'semilla';const isStart=startersSet.has(name);const isFinal=finalsSet.has(name);if(isStart&&isFinal)return 'inicial+final';if(isStart)return 'inicial';if(isFinal)return 'final';return 'normal';}\n");
-        html.append("function draw(){ctx.clearRect(0,0,graph.width,graph.height);for(let i=0;i<current.edges.length;i++){const e=current.edges[i];const a=toScreen(current.pos.get(e.source));const b=toScreen(current.pos.get(e.target));ctx.strokeStyle=e.isBackward?'rgba(167,139,250,0.55)':'rgba(56,189,248,0.25)';ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}ctx.font='11px Arial';ctx.textBaseline='middle';current.nodes.forEach(name=>{const wp=current.pos.get(name);if(!wp)return;const p=toScreen(wp);const r=nodeRadius(name);ctx.fillStyle=nodeColor(name);ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#e5e7eb';ctx.fillText(name,p.x+r+3,p.y);});}\n");
-        html.append("function findNode(mx,my){for(let i=current.nodes.length-1;i>=0;i--){const name=current.nodes[i];const wp=current.pos.get(name);if(!wp)continue;const p=toScreen(wp);const r=nodeRadius(name)+3;const dx=mx-p.x;const dy=my-p.y;if((dx*dx+dy*dy)<=r*r)return name;}return ''; }\n");
-        html.append("function showTooltip(name,mx,my){if(!name){tooltip.style.display='none';return;}const meta=(DATA.jobsByName&&DATA.jobsByName[name])?DATA.jobsByName[name]:{};const inCount=(meta.inCount===undefined)?'N/A':meta.inCount;const outCount=(meta.outCount===undefined)?'N/A':meta.outCount;const isn=meta.isn||'N/A';const dc=meta.datacenter||'N/A';tooltip.style.display='block';tooltip.textContent='jobname: '+name+' | datacenter: '+dc+' | #inCondition: '+inCount+' | #outCondition: '+outCount+' | #isn: '+isn+' | tipo: '+nodeType(name);tooltip.style.left=(mx+12)+'px';tooltip.style.top=(my+12)+'px';}\n");
-        html.append("function render(){const seed=document.getElementById('seed').value.trim();const depthFrom=parseInt(document.getElementById('depthFrom').value,10);const depthTo=parseInt(document.getElementById('depthTo').value,10);const maxNodes=parseInt(document.getElementById('maxNodes').value,10)||800;const safeFrom=isNaN(depthFrom)?-2:Math.max(-20,Math.min(0,depthFrom));const safeTo=isNaN(depthTo)?3:Math.max(0,Math.min(20,depthTo));const subset=buildSubset(seed,safeFrom,safeTo,maxNodes);if(subset.nodes.length===0){current={nodes:[],edges:[],pos:new Map(),nodeDepth:new Map(),seed:''};draw();return;}current={nodes:subset.nodes,edges:subset.edges,pos:buildLayout(subset),nodeDepth:subset.nodeDepth,seed:subset.seed};view={offsetX:40,offsetY:40,scale:1};draw();}\n");
-        html.append("graph.addEventListener('mousedown',ev=>{const r=graph.getBoundingClientRect();const mx=ev.clientX-r.left;const my=ev.clientY-r.top;const hit=findNode(mx,my);lastX=mx;lastY=my;if(hit){dragNode=hit;}else{isPanning=true;}});\n");
-        html.append("graph.addEventListener('mousemove',ev=>{const r=graph.getBoundingClientRect();const mx=ev.clientX-r.left;const my=ev.clientY-r.top;if(dragNode){const p=current.pos.get(dragNode);if(p){p.x+=(mx-lastX)/view.scale;p.y+=(my-lastY)/view.scale;}lastX=mx;lastY=my;draw();showTooltip(dragNode,mx,my);return;}if(isPanning){view.offsetX+=mx-lastX;view.offsetY+=my-lastY;lastX=mx;lastY=my;draw();return;}const hover=findNode(mx,my);showTooltip(hover,mx,my);});\n");
-        html.append("graph.addEventListener('mouseup',()=>{dragNode='';isPanning=false;});graph.addEventListener('mouseleave',()=>{dragNode='';isPanning=false;tooltip.style.display='none';});\n");
-        html.append("graph.addEventListener('wheel',ev=>{ev.preventDefault();const r=graph.getBoundingClientRect();const mx=ev.clientX-r.left;const my=ev.clientY-r.top;const before=toWorld(mx,my);const factor=ev.deltaY<0?1.1:0.9;view.scale=Math.max(0.25,Math.min(3,view.scale*factor));const after=toScreen(before);view.offsetX+=mx-after.x;view.offsetY+=my-after.y;draw();},{passive:false});\n");
-        html.append("document.getElementById('renderBtn').addEventListener('click',render);render();\n");
-        html.append("</script>\n");
-        html.append("</body>\n");
-        html.append("</html>\n");
-
+        html.append("<!doctype html><html lang=\"es\"><head><meta charset=\"UTF-8\"/><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>");
+        html.append("<title>Reporte de Malla</title><style>");
+        html.append("body{margin:0;font-family:Arial,sans-serif;background:#0b1220;color:#e5e7eb}.wrap{max-width:1300px;margin:0 auto;padding:18px}.muted{color:#9ca3af}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0}.box{border:1px solid #263449;padding:10px;background:#111a2b}.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}input,button{background:#0f172a;color:#e5e7eb;border:1px solid #334155;padding:7px 8px}button{cursor:pointer}#graphWrap{position:relative}canvas{width:100%;height:620px;display:block;border:1px solid #263449;background:#060b15}.tooltip{position:absolute;display:none;pointer-events:none;background:#020617;color:#e2e8f0;border:1px solid #334155;padding:4px 6px;font-size:12px;white-space:nowrap}ul{margin:6px 0 0 18px;padding:0;max-height:220px;overflow:auto}@media(max-width:1100px){.grid{grid-template-columns:1fr}}</style></head><body>");
+        html.append("<div class=\"wrap\"><h1>Reporte Completo de Dependencias</h1><p class=\"muted\">Fuente: ").append(escapeHtml(sourcePath)).append(" | Tiempo: ").append(elapsed).append(" ms</p><div class=\"grid\" id=\"stats\"></div>");
+        html.append("<div class=\"box\"><h2>Malla completa</h2><p class=\"muted\">Colores: semilla rojo, final azul, iniciador amarillo, normal celeste, inicial+final cian, arista hacia atras violeta.</p>");
+        html.append("<div class=\"row\"><label>Job semilla:</label><input id=\"seed\" type=\"text\" size=\"18\" value=\"").append(escapeHtml(seedJob)).append("\"/><label>Profundidad atras:</label><input id=\"depthBack\" type=\"number\" value=\"2\" min=\"0\" max=\"20\"/><label>Profundidad adelante:</label><input id=\"depthForward\" type=\"number\" value=\"3\" min=\"0\" max=\"20\"/><label>Max nodos:</label><input id=\"maxNodes\" type=\"number\" value=\"800\" min=\"50\" max=\"5000\"/><button id=\"renderBtn\">Renderizar</button></div>");
+        html.append("<div id=\"graphWrap\"><canvas id=\"graph\" width=\"1280\" height=\"620\"></canvas><div class=\"tooltip\" id=\"nodeTooltip\"></div></div></div>");
+        html.append("<div class=\"grid\"><div class=\"box\"><h2>Iniciadores</h2><ul id=\"starters\"></ul></div><div class=\"box\"><h2>Finales</h2><ul id=\"finals\"></ul></div><div class=\"box\"><h2>Condiciones faltantes</h2><ul id=\"missing\"></ul></div></div></div>");
+        html.append("<script>const DATA=").append(json).append(";const stats=[['Jobs leidos',DATA.totalJobsRead],['Canonicos',DATA.canonicalCount],['Iniciadores',DATA.totalStarters],['Finales',DATA.totalFinals],['Rotas',DATA.totalBrokenReferences],['Faltantes',DATA.totalMissingJobs],['Nodos',DATA.mapNodes.length],['Aristas',DATA.mapEdges.length]];const statsEl=document.getElementById('stats');stats.forEach(s=>{const d=document.createElement('div');d.className='box';d.textContent=s[0]+': '+s[1];statsEl.appendChild(d);});function fill(id,arr){const el=document.getElementById(id);arr.slice(0,1500).forEach(v=>{const li=document.createElement('li');li.textContent=typeof v==='string'?v:(v.jobname+' | '+v.condition);el.appendChild(li);});}fill('starters',DATA.starters);fill('finals',DATA.finals);fill('missing',DATA.missingJobs);const graph=document.getElementById('graph');const ctx=graph.getContext('2d');const tooltip=document.getElementById('nodeTooltip');const startersSet=new Set(DATA.starters);const finalsSet=new Set(DATA.finals);const outMap=new Map(),inMap=new Map();DATA.mapEdges.forEach(e=>{if(!outMap.has(e.source))outMap.set(e.source,[]);outMap.get(e.source).push(e.target);if(!inMap.has(e.target))inMap.set(e.target,[]);inMap.get(e.target).push(e.source);});function buildSubset(seed,b,f,max){const hasSeed=seed&&DATA.mapNodes.indexOf(seed)>=0;const nodes=new Set(),backward=new Set();if(hasSeed){nodes.add(seed);const fq=[{n:seed,d:0}],fb=new Map();fb.set(seed,0);while(fq.length&&nodes.size<=max){const cur=fq.shift();if(cur.d>=f)continue;(outMap.get(cur.n)||[]).forEach(to=>{const nd=cur.d+1,p=fb.get(to);if(p!==undefined&&p<=nd)return;fb.set(to,nd);if(nodes.size<max||nodes.has(to))nodes.add(to);fq.push({n:to,d:nd});});}const bq=[{n:seed,d:0}],bb=new Map();bb.set(seed,0);while(bq.length&&nodes.size<=max){const cur=bq.shift();if(cur.d>=b)continue;(inMap.get(cur.n)||[]).forEach(from=>{const nd=cur.d+1,p=bb.get(from);if(p!==undefined&&p<=nd)return;bb.set(from,nd);if(nodes.size<max||nodes.has(from))nodes.add(from);backward.add(from+'->'+cur.n);bq.push({n:from,d:nd});});}}else{const q=[];for(let i=0;i<DATA.starters.length&&i<50;i++)q.push({n:DATA.starters[i],d:0});while(q.length&&nodes.size<max){const cur=q.shift();if(nodes.has(cur.n)||cur.d>f)continue;nodes.add(cur.n);(outMap.get(cur.n)||[]).forEach(x=>q.push({n:x,d:cur.d+1}));}}const edges=[];DATA.mapEdges.forEach(e=>{if(nodes.has(e.source)&&nodes.has(e.target))edges.push({source:e.source,target:e.target,isBackward:backward.has(e.source+'->'+e.target)});});return{nodes:[...nodes],edges:edges,seed:hasSeed?seed:''};}let current={nodes:[],edges:[],pos:new Map(),seed:''};let view={offsetX:40,offsetY:40,scale:1};let dragNode='';let isPanning=false;let lastX=0,lastY=0;function toScreen(p){return{x:p.x*view.scale+view.offsetX,y:p.y*view.scale+view.offsetY};}function toWorld(x,y){return{x:(x-view.offsetX)/view.scale,y:(y-view.offsetY)/view.scale};}function layout(sub){const pos=new Map();const cols=Math.max(2,Math.floor(Math.sqrt(sub.nodes.length)));sub.nodes.forEach((n,i)=>{const c=i%cols,r=Math.floor(i/cols);pos.set(n,{x:80+(c/(cols-1||1))*1000,y:70+(r/(Math.ceil(sub.nodes.length/cols)-1||1))*500,vx:0,vy:0});});for(let s=0;s<100;s++){for(let i=0;i<sub.nodes.length;i++){const a=pos.get(sub.nodes[i]);for(let j=i+1;j<sub.nodes.length;j++){const b=pos.get(sub.nodes[j]);let dx=a.x-b.x,dy=a.y-b.y,dist=Math.sqrt(dx*dx+dy*dy)+0.1,f=2200/(dist*dist);a.vx+=dx/dist*f;b.vx-=dx/dist*f;a.vy+=dy/dist*f;b.vy-=dy/dist*f;}}sub.edges.forEach(e=>{const a=pos.get(e.source),b=pos.get(e.target);let dx=b.x-a.x,dy=b.y-a.y,dist=Math.sqrt(dx*dx+dy*dy)+0.1,t=(dist-75)*0.02;a.vx+=dx/dist*t;a.vy+=dy/dist*t;b.vx-=dx/dist*t;b.vy-=dy/dist*t;});sub.nodes.forEach(n=>{const p=pos.get(n);p.vx*=0.84;p.vy*=0.84;p.x=Math.max(10,Math.min(1200,p.x+p.vx));p.y=Math.max(10,Math.min(580,p.y+p.vy));});}return pos;}function radius(n){return n===current.seed?8.5:4.5;}function color(n){if(n===current.seed)return '#ef4444';const s=startersSet.has(n),f=finalsSet.has(n);if(s&&f)return '#22d3ee';if(f)return '#60a5fa';if(s)return '#facc15';return '#93c5fd';}function type(n){if(n===current.seed)return 'semilla';if(startersSet.has(n))return 'inicial';if(finalsSet.has(n))return 'final';return 'normal';}function draw(){ctx.clearRect(0,0,graph.width,graph.height);current.edges.forEach(e=>{const a=toScreen(current.pos.get(e.source)),b=toScreen(current.pos.get(e.target));ctx.strokeStyle=e.isBackward?'rgba(167,139,250,0.55)':'rgba(56,189,248,0.25)';ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();});ctx.font='11px Arial';ctx.textBaseline='middle';current.nodes.forEach(n=>{const p=toScreen(current.pos.get(n)),r=radius(n);ctx.fillStyle=color(n);ctx.beginPath();ctx.arc(p.x,p.y,r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#e5e7eb';ctx.fillText(n,p.x+r+3,p.y);});}function hit(mx,my){for(let i=current.nodes.length-1;i>=0;i--){const n=current.nodes[i],p=toScreen(current.pos.get(n));const rr=radius(n)+3,dx=mx-p.x,dy=my-p.y;if(dx*dx+dy*dy<=rr*rr)return n;}return '';}function show(name,mx,my){if(!name){tooltip.style.display='none';return;}const m=(DATA.jobsByName&&DATA.jobsByName[name])?DATA.jobsByName[name]:{};tooltip.style.display='block';tooltip.textContent='jobname: '+name+' | datacenter: '+(m.datacenter||'N/A')+' | #inCondition: '+(m.inCount===undefined?'N/A':m.inCount)+' | #outCondition: '+(m.outCount===undefined?'N/A':m.outCount)+' | #isn: '+(m.isn||'N/A')+' | tipo: '+type(name);tooltip.style.left=(mx+12)+'px';tooltip.style.top=(my+12)+'px';}function render(){const seed=document.getElementById('seed').value.trim();const b=Math.max(0,Math.min(20,parseInt(document.getElementById('depthBack').value,10)||2));const f=Math.max(0,Math.min(20,parseInt(document.getElementById('depthForward').value,10)||3));const max=Math.max(50,Math.min(5000,parseInt(document.getElementById('maxNodes').value,10)||800));const sub=buildSubset(seed,b,f,max);if(sub.nodes.length===0){current={nodes:[],edges:[],pos:new Map(),seed:''};draw();return;}current={nodes:sub.nodes,edges:sub.edges,pos:layout(sub),seed:sub.seed};view={offsetX:40,offsetY:40,scale:1};draw();}graph.addEventListener('mousedown',e=>{const r=graph.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;lastX=mx;lastY=my;if(e.button===1){e.preventDefault();isPanning=true;return;}const h=hit(mx,my);if(h&&e.button===0){dragNode=h;}else if(e.button===0){isPanning=true;}});graph.addEventListener('mousemove',e=>{const r=graph.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top;if(dragNode){const p=current.pos.get(dragNode);if(p){p.x+=(mx-lastX)/view.scale;p.y+=(my-lastY)/view.scale;}lastX=mx;lastY=my;draw();show(dragNode,mx,my);return;}if(isPanning){view.offsetX+=mx-lastX;view.offsetY+=my-lastY;lastX=mx;lastY=my;draw();return;}show(hit(mx,my),mx,my);});graph.addEventListener('mouseup',()=>{dragNode='';isPanning=false;});graph.addEventListener('mouseleave',()=>{dragNode='';isPanning=false;tooltip.style.display='none';});graph.addEventListener('auxclick',e=>{if(e.button===1)e.preventDefault();});graph.addEventListener('wheel',e=>{e.preventDefault();const r=graph.getBoundingClientRect(),mx=e.clientX-r.left,my=e.clientY-r.top,before=toWorld(mx,my),factor=e.deltaY<0?1.1:0.9;view.scale=Math.max(0.25,Math.min(3,view.scale*factor));const after=toScreen(before);view.offsetX+=mx-after.x;view.offsetY+=my-after.y;draw();},{passive:false});document.getElementById('renderBtn').addEventListener('click',render);render();</script></body></html>");
         writeUtf8(new File(dir, "reporte_completo.html"), html.toString());
     }
 
     private static void writeSeedTreeReport(File dir, FlowAnalyzer.AnalysisResult result, String seedJob) throws Exception {
         if (!result.mapNodes.contains(seedJob)) {
-            StringBuilder missing = new StringBuilder();
-            missing.append("SEMILLA NO ENCONTRADA\n");
-            missing.append("job semilla: ").append(seedJob).append("\n");
-            missing.append("No existe dentro de los jobs canonicos.\n");
-            writeUtf8(new File(dir, "arbol_semilla.txt"), missing.toString());
+            writeUtf8(new File(dir, "arbol_semilla.txt"), "SEMILLA NO ENCONTRADA\njob semilla: " + seedJob + "\n");
             return;
         }
 
@@ -234,7 +153,6 @@ public class FlowAnalysisBatch {
         Deque<String> queue = new ArrayDeque<String>();
         queue.add(seedJob);
         backwardDepth.put(seedJob, Integer.valueOf(0));
-
         while (!queue.isEmpty()) {
             String current = queue.poll();
             backwardNodes.add(current);
@@ -297,24 +215,20 @@ public class FlowAnalysisBatch {
         sb.append("Nodos alcanzados hacia atras (hasta iniciadores): ").append(backwardNodes.size()).append("\n");
         sb.append("Iniciadores alcanzados: ").append(reachedStarters.size()).append("\n");
         sb.append("Nodos alcanzados hacia adelante: ").append(forwardNodes.size()).append("\n\n");
-
         sb.append("INICIADORES ALCANZADOS\n");
         for (String starter : reachedStarters) {
             sb.append(starter).append("\n");
         }
-
         sb.append("\nARBOL HACIA ATRAS (depth negativo)\n");
         for (Map.Entry<String, Integer> row : orderedBackward) {
             sb.append(row.getKey()).append(" | depth=").append(row.getValue().intValue()).append("\n");
         }
-
         sb.append("\nSUBARBOL HACIA ADELANTE\n");
         List<String> orderedForward = new ArrayList<String>(forwardNodes);
         Collections.sort(orderedForward);
         for (String node : orderedForward) {
             sb.append(node).append("\n");
         }
-
         writeUtf8(new File(dir, "arbol_semilla.txt"), sb.toString());
     }
 
@@ -324,7 +238,6 @@ public class FlowAnalysisBatch {
         sb.append("RUTAS PRINCIPALES ESTIMADAS\n");
         sb.append("Metodo: aproximacion por SCC + camino mas largo en DAG condensado.\n");
         sb.append("Se reportan maximo 5 rutas candidatas.\n\n");
-
         if (topRoutes.isEmpty()) {
             sb.append("No se pudo estimar una ruta principal.\n");
         } else {
@@ -340,7 +253,6 @@ public class FlowAnalysisBatch {
                 sb.append("\n\n");
             }
         }
-
         writeUtf8(new File(dir, "ruta_principal_estimacion.txt"), sb.toString());
     }
 
@@ -464,24 +376,7 @@ public class FlowAnalysisBatch {
                     names.add(result.mapNodes.get(idx.intValue()));
                 }
                 Collections.sort(names);
-                if (names.size() == 1) {
-                    routeNames.add(names.get(0));
-                } else {
-                    StringBuilder block = new StringBuilder();
-                    block.append("{");
-                    int limit = Math.min(5, names.size());
-                    for (int i = 0; i < limit; i++) {
-                        if (i > 0) {
-                            block.append("|");
-                        }
-                        block.append(names.get(i));
-                    }
-                    if (names.size() > limit) {
-                        block.append("|...");
-                    }
-                    block.append("}");
-                    routeNames.add(block.toString());
-                }
+                routeNames.add(names.get(0));
             }
 
             String signature = join(routeNames, "->");
@@ -490,7 +385,6 @@ public class FlowAnalysisBatch {
                 routes.add(routeNames);
             }
         }
-
         return routes;
     }
 
@@ -524,7 +418,6 @@ public class FlowAnalysisBatch {
         st.cursor++;
         st.stack.push(Integer.valueOf(v));
         st.onStack[v] = true;
-
         for (Integer wObj : st.adj.get(v)) {
             int w = wObj.intValue();
             if (st.index[w] == -1) {
@@ -534,7 +427,6 @@ public class FlowAnalysisBatch {
                 st.low[v] = Math.min(st.low[v], st.index[w]);
             }
         }
-
         if (st.low[v] == st.index[v]) {
             List<Integer> comp = new ArrayList<Integer>();
             while (true) {

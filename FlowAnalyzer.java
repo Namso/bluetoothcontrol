@@ -279,10 +279,25 @@ public class FlowAnalyzer {
         }
 
         for (Job job : canonical) {
-            if (valueOf(inboundScore, job.jobname) == 0) {
+            // Starter is structural: jobs without inCond.
+            if (job.inCond.isEmpty()) {
                 result.starters.add(job.jobname);
             }
-            if (valueOf(outboundScore, job.jobname) == 0) {
+
+            Set<String> seenTargets = new HashSet<String>();
+            for (String cond : job.outCond) {
+                Set<String> consumers = consumersByCond.get(cond);
+                if (consumers == null) {
+                    continue;
+                }
+                for (String target : consumers) {
+                    if (!job.jobname.equals(target)) {
+                        seenTargets.add(target);
+                    }
+                }
+            }
+            int successors = seenTargets.size();
+            if (successors == 0) {
                 result.finals.add(job.jobname);
             }
         }
