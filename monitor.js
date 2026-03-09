@@ -1,39 +1,14 @@
-const SAMPLE = [
-  {
-    memname: 'HACCETB6',
-    isn: '1',
-    versionserial: 1,
-    datacenter: 'Altair',
-    inCond: ['HABJD270-HABJG271'],
-    outCond: ['HABJG271-HABJG272'],
-    jobname: 'HABJG271',
-  },
-  {
-    memname: 'BGEXTUYA',
-    isn: '2',
-    versionserial: 1,
-    datacenter: 'Altair',
-    inCond: ['HABJG271-HABJG272'],
-    outCond: ['HABJG272-HABJG273', 'HABJG272-HABJG274'],
-    jobname: 'HABJG272',
-  },
-];
-
 const ui = {
   wsUrl: document.getElementById('wsUrl'),
   connectBtn: document.getElementById('connectBtn'),
-  sendBtn: document.getElementById('sendBtn'),
+  refreshBtn: document.getElementById('refreshBtn'),
   status: document.getElementById('status'),
-  fileInput: document.getElementById('fileInput'),
-  jsonInput: document.getElementById('jsonInput'),
   stats: document.getElementById('stats'),
   graph: document.getElementById('graph'),
   topIn: document.getElementById('topIn'),
   topOut: document.getElementById('topOut'),
   broken: document.getElementById('broken'),
 };
-
-ui.jsonInput.value = JSON.stringify(SAMPLE, null, 2);
 
 let socket = null;
 
@@ -48,7 +23,7 @@ function connect() {
     setStatus('Conectando...', false);
 
     socket.onopen = function () {
-      setStatus('Conectado', true);
+      setStatus('Conectado, esperando resultado...', true);
     };
 
     socket.onclose = function () {
@@ -62,6 +37,7 @@ function connect() {
     socket.onmessage = function (event) {
       const msg = JSON.parse(event.data);
       if (msg.type === 'analysisResult') {
+        setStatus('Resultado recibido', true);
         render(msg.data);
       } else if (msg.type === 'error') {
         setStatus('Error: ' + msg.message, false);
@@ -72,22 +48,12 @@ function connect() {
   }
 }
 
-function sendAnalyze() {
+function requestResult() {
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     setStatus('Primero conectate al WebSocket', false);
     return;
   }
-  const raw = ui.jsonInput.value.trim();
-  if (!raw) {
-    setStatus('No hay JSON para analizar', false);
-    return;
-  }
-  socket.send(
-    JSON.stringify({
-      type: 'analyze',
-      payload: raw,
-    })
-  );
+  socket.send(JSON.stringify({ type: 'getResult' }));
 }
 
 function render(data) {
@@ -195,15 +161,5 @@ function placeColumn(items, x, pos) {
   });
 }
 
-ui.fileInput.addEventListener('change', function (event) {
-  const file = event.target.files && event.target.files[0];
-  if (!file) {
-    return;
-  }
-  file.text().then(function (content) {
-    ui.jsonInput.value = content;
-  });
-});
-
 ui.connectBtn.addEventListener('click', connect);
-ui.sendBtn.addEventListener('click', sendAnalyze);
+ui.refreshBtn.addEventListener('click', requestResult);

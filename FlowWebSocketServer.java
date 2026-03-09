@@ -13,11 +13,11 @@ import java.util.Base64;
 public class FlowWebSocketServer {
 
     private final int port;
-    private final FlowAnalyzer analyzer;
+    private final String resultPayload;
 
-    public FlowWebSocketServer(int port) {
+    public FlowWebSocketServer(int port, String resultPayload) {
         this.port = port;
-        this.analyzer = new FlowAnalyzer();
+        this.resultPayload = resultPayload;
     }
 
     public void start() throws Exception {
@@ -56,6 +56,9 @@ public class FlowWebSocketServer {
             out.write(response.getBytes(StandardCharsets.UTF_8));
             out.flush();
 
+            // El resultado se envia de inmediato para que el cliente solo consuma y pinte.
+            sendTextFrame(out, resultPayload);
+
             while (!client.isClosed()) {
                 String payload = readTextFrame(in);
                 if (payload == null) {
@@ -77,18 +80,18 @@ public class FlowWebSocketServer {
         try {
             JSONObject request = new JSONObject(payload);
             String type = request.optString("type", "");
-            if (!"analyze".equals(type)) {
+            if ("getResult".equals(type)) {
+                sendTextFrame(out, resultPayload);
+                return;
+            }
+            if (!"ping".equals(type)) {
                 sendError(out, "Tipo de mensaje no soportado");
                 return;
             }
 
-            String rawJsonArray = request.optString("payload", "");
-            FlowAnalyzer.AnalysisResult result = analyzer.analyze(rawJsonArray);
-
-            JSONObject response = new JSONObject();
-            response.put("type", "analysisResult");
-            response.put("data", result.toJson());
-            sendTextFrame(out, response.toString());
+            JSONObject pong = new JSONObject();
+            pong.put("type", "pong");
+            sendTextFrame(out, pong.toString());
         } catch (Exception ex) {
             sendError(out, "Error de analisis: " + ex.getMessage());
         }
@@ -223,10 +226,29 @@ public class FlowWebSocketServer {
     }
 
     public static void main(String[] args) throws Exception {
-        int port = 8081;
-        if (args.length > 0) {
-            port = Integer.parseInt(args[0]);
+        if (args.length == 0) {
+            System.out.println("Uso: java FlowWebSocketServer <ruta-json> [puerto]");
+            return;
         }
-        new FlowWebSocketServer(port).start();
+
+        String jsonPath = args[0];
+        int port = 8081;
+        if (args.length > 1) {
+            port = Integer.parseInt(args[1]);
+        }
+
+        FlowAnalyzer analyzer = new FlowAnalyzer();
+        System.out.println("Iniciando analisis desde archivo: " + jsonPath);
+        long startedAt = System.currentTimeMillis();
+        FlowAnalyzer.AnalysisResult result = analyzer.analyzeFile(jsonPath);
+        long elapsed = System.currentTimeMillis() - startedAt;
+        System.out.println("Analisis completado en " + elapsed + " ms. Jobs canonicos: " + result.canonicalCount);
+
+        JSONObject response = new JSONObject();
+        response.put("type", "analysisResult");
+        response.put("elapsedMs", elapsed);
+        response.put("data", result.toJson());
+
+        new FlowWebSocketServer(port, response.toString()).start();
     }
 }

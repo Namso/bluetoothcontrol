@@ -59,6 +59,9 @@
         flex-wrap: wrap;
         margin-top: 12px;
       }
+      .actions {
+        margin-top: 8px;
+      }
       .box {
         border: 1px solid #334155;
         background: #0f172a;
@@ -103,15 +106,13 @@
         <label>WebSocket URL:</label>
         <input id="wsUrl" type="text" value="ws://localhost:8081" size="28" />
         <button id="connectBtn">Conectar</button>
+        <button id="refreshBtn">Solicitar resultado</button>
         <span id="status" class="muted">Desconectado</span>
       </div>
 
-      <div class="row">
-        <input id="fileInput" type="file" accept="application/json" />
-        <button id="sendBtn">Analizar por WebSocket</button>
-      </div>
-
-      <textarea id="jsonInput" placeholder="Pega aqui el arreglo JSON de jobs"></textarea>
+      <p class="muted actions">
+        El JSON grande se analiza en Java antes de levantar este WebSocket. Este monitor solo recibe y pinta el resultado.
+      </p>
 
       <div class="stats" id="stats"></div>
 
