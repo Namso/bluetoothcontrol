@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FlowRepair Monitor</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        background: #020617;
+        color: #e2e8f0;
+        font-family: Arial, sans-serif;
+      }
+      .wrap {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      h1 {
+        margin: 0 0 6px 0;
+      }
+      .muted {
+        color: #94a3b8;
+      }
+      textarea {
+        width: 100%;
+        min-height: 220px;
+        background: #0f172a;
+        color: #cbd5e1;
+        border: 1px solid #334155;
+        padding: 10px;
+        box-sizing: border-box;
+        font-family: monospace;
+        font-size: 12px;
+      }
+      button,
+      input[type='text'] {
+        background: #0f172a;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+        padding: 8px 10px;
+      }
+      button:hover {
+        border-color: #64748b;
+        cursor: pointer;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin: 10px 0;
+      }
+      .stats {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+        margin-top: 12px;
+      }
+      .box {
+        border: 1px solid #334155;
+        background: #0f172a;
+        padding: 8px;
+      }
+      .graph {
+        margin-top: 16px;
+        border: 1px solid #334155;
+        background: #020617;
+      }
+      .list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 10px;
+      }
+      @media (max-width: 900px) {
+        .list {
+          grid-template-columns: 1fr;
+        }
+      }
+      ul {
+        margin: 8px 0 0 16px;
+        padding: 0;
+      }
+      li {
+        margin: 3px 0;
+      }
+      .ok {
+        color: #22c55e;
+      }
+      .err {
+        color: #f87171;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <h1>FlowRepair Monitor</h1>
+      <p class="muted">Cliente nativo HTML/JS conectado por WebSocket al motor Java 8.</p>
+
+      <div class="row">
+        <label>WebSocket URL:</label>
+        <input id="wsUrl" type="text" value="ws://localhost:8081" size="28" />
+        <button id="connectBtn">Conectar</button>
+        <span id="status" class="muted">Desconectado</span>
+      </div>
+
+      <div class="row">
+        <input id="fileInput" type="file" accept="application/json" />
+        <button id="sendBtn">Analizar por WebSocket</button>
+      </div>
+
+      <textarea id="jsonInput" placeholder="Pega aqui el arreglo JSON de jobs"></textarea>
+
+      <div class="stats" id="stats"></div>
+
+      <svg id="graph" class="graph" viewBox="0 0 1100 520" width="100%" height="520"></svg>
+
+      <div class="list">
+        <div class="box">
+          <strong>Top entrada</strong>
+          <ul id="topIn"></ul>
+        </div>
+        <div class="box">
+          <strong>Top salida</strong>
+          <ul id="topOut"></ul>
+        </div>
+      </div>
+
+      <div class="box" style="margin-top: 10px">
+        <strong>Referencias rotas (primeras 25)</strong>
+        <ul id="broken"></ul>
+      </div>
+    </div>
+
+    <script src="/monitor.js"></script>
+  </body>
+  </html>
