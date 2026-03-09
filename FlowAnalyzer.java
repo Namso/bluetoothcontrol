@@ -18,6 +18,11 @@ import java.util.Set;
 
 public class FlowAnalyzer {
 
+    private static final int MAX_STARTERS_DETAILS = 2000;
+    private static final int MAX_FINALS_DETAILS = 2000;
+    private static final int MAX_BROKEN_DETAILS = 5000;
+    private static final int MAX_MISSING_DETAILS = 5000;
+
     public static class Job {
         String key;
         String memname;
@@ -85,6 +90,10 @@ public class FlowAnalyzer {
     public static class AnalysisResult {
         int totalJobsRead;
         int canonicalCount;
+        int totalStarters;
+        int totalFinals;
+        int totalBrokenReferences;
+        int totalMissingJobs;
         List<String> starters = new ArrayList<String>();
         List<String> finals = new ArrayList<String>();
         List<ScoredJob> topInbound = new ArrayList<ScoredJob>();
@@ -98,6 +107,10 @@ public class FlowAnalyzer {
             JSONObject o = new JSONObject();
             o.put("totalJobsRead", totalJobsRead);
             o.put("canonicalCount", canonicalCount);
+            o.put("totalStarters", totalStarters);
+            o.put("totalFinals", totalFinals);
+            o.put("totalBrokenReferences", totalBrokenReferences);
+            o.put("totalMissingJobs", totalMissingJobs);
             o.put("starters", new JSONArray(starters));
             o.put("finals", new JSONArray(finals));
 
@@ -255,13 +268,38 @@ public class FlowAnalyzer {
             }
         }
 
+        result.totalStarters = result.starters.size();
+        result.totalFinals = result.finals.size();
+        result.totalBrokenReferences = result.brokenReferences.size();
+
         result.topInbound = buildTop(canonical, inboundScore, 25);
         result.topOutbound = buildTop(canonical, outboundScore, 25);
         result.missingJobs = new ArrayList<String>(missingNames);
         Collections.sort(result.missingJobs);
+        result.totalMissingJobs = result.missingJobs.size();
+
+        // Limites para no enviar payloads gigantes por WebSocket.
+        result.starters = trimList(result.starters, MAX_STARTERS_DETAILS);
+        result.finals = trimList(result.finals, MAX_FINALS_DETAILS);
+        result.brokenReferences = trimBrokenList(result.brokenReferences, MAX_BROKEN_DETAILS);
+        result.missingJobs = trimList(result.missingJobs, MAX_MISSING_DETAILS);
 
         buildCompactGraph(canonical, canonicalNames, result);
         return result;
+    }
+
+    private static List<BrokenReference> trimBrokenList(List<BrokenReference> list, int max) {
+        if (list.size() <= max) {
+            return list;
+        }
+        return new ArrayList<BrokenReference>(list.subList(0, max));
+    }
+
+    private static List<String> trimList(List<String> list, int max) {
+        if (list.size() <= max) {
+            return list;
+        }
+        return new ArrayList<String>(list.subList(0, max));
     }
 
     private Map<String, Map<String, Set<String>>> buildOutByDatacenter(List<Job> jobs) {

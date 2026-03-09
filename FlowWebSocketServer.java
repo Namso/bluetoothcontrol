@@ -57,6 +57,7 @@ public class FlowWebSocketServer {
             out.flush();
 
             // El resultado se envia de inmediato para que el cliente solo consuma y pinte.
+            System.out.println("Enviando resultado al cliente. Bytes: " + resultPayload.getBytes(StandardCharsets.UTF_8).length);
             sendTextFrame(out, resultPayload);
 
             while (!client.isClosed()) {
@@ -192,25 +193,22 @@ public class FlowWebSocketServer {
 
     private static void sendTextFrame(BufferedOutputStream out, String message) throws Exception {
         byte[] payload = message.getBytes(StandardCharsets.UTF_8);
-        int length = payload.length;
-        ByteArrayOutputStream frame = new ByteArrayOutputStream();
+        long length = payload.length;
 
-        frame.write(0x81);
+        out.write(0x81);
         if (length <= 125) {
-            frame.write(length);
+            out.write((int) length);
         } else if (length <= 65535) {
-            frame.write(126);
-            frame.write((length >> 8) & 0xFF);
-            frame.write(length & 0xFF);
+            out.write(126);
+            out.write((int) ((length >> 8) & 0xFF));
+            out.write((int) (length & 0xFF));
         } else {
-            frame.write(127);
+            out.write(127);
             for (int i = 7; i >= 0; i--) {
-                frame.write((length >> (8 * i)) & 0xFF);
+                out.write((int) ((length >> (8 * i)) & 0xFF));
             }
         }
-        frame.write(payload);
-
-        out.write(frame.toByteArray());
+        out.write(payload);
         out.flush();
     }
 

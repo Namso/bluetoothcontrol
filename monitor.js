@@ -61,10 +61,10 @@ function render(data) {
   const stats = [
     ['Jobs leidos', data.totalJobsRead],
     ['Jobs canonicos', data.canonicalCount],
-    ['Iniciadores', data.starters.length],
-    ['Finales', data.finals.length],
-    ['Rotas', data.brokenReferences.length],
-    ['Faltantes', data.missingJobs.length],
+    ['Iniciadores', data.totalStarters != null ? data.totalStarters : data.starters.length],
+    ['Finales', data.totalFinals != null ? data.totalFinals : data.finals.length],
+    ['Rotas', data.totalBrokenReferences != null ? data.totalBrokenReferences : data.brokenReferences.length],
+    ['Faltantes', data.totalMissingJobs != null ? data.totalMissingJobs : data.missingJobs.length],
   ];
   stats.forEach(function (entry) {
     const div = document.createElement('div');
