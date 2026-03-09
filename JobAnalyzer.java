@@ -16,7 +16,7 @@ import java.util.*;
  *   javac -cp json-20231013.jar JobAnalyzer.java
  *
  * EJECUTAR:
- *   java -Xmx4g -cp ".:json-20231013.jar" JobAnalyzer /ruta/a/jobs.json [profundidad_visor] [job_semilla]
+ *   java -Xmx4g -cp ".:json-20231013.jar" JobAnalyzer /ruta/a/jobs.json [profundidad] [job_semilla]
  *
  * EJEMPLO:
  *   java -Xmx4g -cp ".:json-20231013.jar" JobAnalyzer datos.json 5 HABJG271
@@ -179,7 +179,7 @@ public class JobAnalyzer {
     private List<String[]> criticalJobs = new ArrayList<>();
     private List<String[]> brokenIn = new ArrayList<>();      // jobname, dc, condicion
     private List<String[]> brokenOut = new ArrayList<>();
-    private List<String[]> missingConds = new ArrayList<>();   // condicion, direccion, lista de jobs que la referencian
+    private List<String[]> missingConds = new ArrayList<>();   // condicion, #refs, lista de jobs que la referencian
     private List<String[]> mirrorGroups = new ArrayList<>();   // jobname, dc, ver, inC, broken, selected
 
     // Grafo de dependencias: jobname -> set de jobnames que le siguen
@@ -192,14 +192,11 @@ public class JobAnalyzer {
 
         // 4a: Broken IN y condiciones faltantes
         System.out.println("[INFO]   Referencias rotas de entrada...");
-        // condiciones que nadie produce y que alguien consume
-        Map<String, List<String>> missingCondMap = new LinkedHashMap<>(); // cond -> [jobs que la esperan]
+        Map<String, List<String>> missingCondMap = new LinkedHashMap<>();
 
         for (Job job : resolvedJobs.values()) {
-            int brkIn = 0;
             for (String c : job.inCond) {
                 if (!allOutConds.contains(c)) {
-                    brkIn++;
                     brokenIn.add(new String[]{job.jobname, job.datacenter, c});
                     if (!missingCondMap.containsKey(c)) missingCondMap.put(c, new ArrayList<String>());
                     if (!missingCondMap.get(c).contains(job.jobname))
@@ -214,8 +211,6 @@ public class JobAnalyzer {
             for (String c : job.outCond) {
                 if (!allInConds.contains(c)) {
                     brokenOut.add(new String[]{job.jobname, job.datacenter, c});
-                    // Tambien es una condicion "colgada"
-                    // No la agregamos a missing porque missing es solo lo que alguien ESPERA y nadie produce
                 }
             }
         }
@@ -231,7 +226,6 @@ public class JobAnalyzer {
             }
             missingConds.add(new String[]{e.getKey(), String.valueOf(e.getValue().size()), refs.toString()});
         }
-        // Ordenar por cantidad de referencias desc
         missingConds.sort(new Comparator<String[]>() {
             @Override public int compare(String[] a, String[] b) {
                 return Integer.compare(Integer.parseInt(b[1]), Integer.parseInt(a[1]));
@@ -244,7 +238,6 @@ public class JobAnalyzer {
             if (!graphForward.containsKey(job.jobname)) graphForward.put(job.jobname, new HashSet<String>());
             if (!graphBackward.containsKey(job.jobname)) graphBackward.put(job.jobname, new HashSet<String>());
         }
-        // Para cada condicion producida, ver quien la consume
         for (Map.Entry<String, List<String>> e : condProducers.entrySet()) {
             String cond = e.getKey();
             List<String> producers = e.getValue();
@@ -291,7 +284,7 @@ public class JobAnalyzer {
             }
         }
 
-        // 4g: Jobs criticos - mayor cantidad de dependencias totales (inCond + outCond)
+        // 4g: Jobs criticos - mayor cantidad de dependencias totales
         System.out.println("[INFO]   Identificando jobs criticos...");
         List<String[]> allSummaries = new ArrayList<>();
         for (Job job : resolvedJobs.values()) {
@@ -344,10 +337,8 @@ public class JobAnalyzer {
         for (String s : job.outCond) if (!allInConds.contains(s)) c++;
         return c;
     }
-    // Cache para no recalcular en cada llamada
     private Set<String> _rawOutCondsCache = null;
     private int countBrokenInRaw(Job job) {
-        // Usa todas las outCond crudas (no solo las resueltas) para comparar gemelos
         if (_rawOutCondsCache == null) {
             _rawOutCondsCache = new HashSet<>();
             for (Job j : rawJobs) _rawOutCondsCache.addAll(j.outCond);
@@ -484,10 +475,6 @@ public class JobAnalyzer {
         sb.append("tr:hover td{background:#1a1a2e;}\n");
         sb.append(".tbl-wrap{max-height:400px;overflow-y:auto;border:1px solid #333;border-radius:4px;margin-bottom:10px;}\n");
         sb.append("input[type=text]{background:#111;border:1px solid #444;color:#fff;padding:6px 10px;border-radius:4px;margin:5px 0;width:300px;font-family:inherit;}\n");
-        sb.append(".tag{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;margin:1px;}\n");
-        sb.append(".tag-init{background:#004422;color:#00ffaa;}\n");
-        sb.append(".tag-final{background:#442200;color:#ffaa00;}\n");
-        sb.append(".tag-crit{background:#440000;color:#ff4444;}\n");
         sb.append("</style>\n</head>\n<body>\n");
 
         sb.append("<h1>&#9881; REPORTE DE ANALISIS - MIGRACION MAINFRAME A CONTROL-M</h1>\n");
@@ -502,7 +489,7 @@ public class JobAnalyzer {
         addStat(sb, "warn", String.valueOf(brokenIn.size()), "Ref. Rotas IN");
         addStat(sb, "warn", String.valueOf(brokenOut.size()), "Ref. Rotas OUT");
         addStat(sb, "err", String.valueOf(missingConds.size()), "Cond. Faltantes");
-        addStat(sb, "", String.valueOf(mirrorGroups.size()/Math.max(1, countMirrorGroups())), "Grupos Gemelos");
+        addStat(sb, "", String.valueOf(countMirrorGroups()), "Grupos Gemelos");
         sb.append("</div>\n");
 
         // Tablas
@@ -536,7 +523,7 @@ public class JobAnalyzer {
     private int countMirrorGroups() {
         Set<String> names = new HashSet<>();
         for (String[] r : mirrorGroups) names.add(r[0]);
-        return Math.max(1, names.size());
+        return names.size();
     }
 
     private void addStat(StringBuilder sb, String cls, String num, String lbl) {
@@ -562,209 +549,303 @@ public class JobAnalyzer {
     }
 
     // =========================================================================
-    // PASO 7: VISOR 3D CON THREE.JS (job semilla, profundidad +-N)
+    // PASO 7: VISOR 3D CON THREE.JS
     // =========================================================================
     public void exportThreeJsViewer(String dir, String seedJob, int depth) throws IOException {
         System.out.println("[INFO] Generando visor 3D para job semilla: " + (seedJob.isEmpty() ? "(todos los iniciales)" : seedJob) + ", profundidad: " + depth);
 
-        // Recolectar nodos via BFS bidireccional
-        Set<String> visitedNodes = new LinkedHashSet<>();
-        Map<String, String[]> edgesCollected = new LinkedHashMap<>(); // "src->tgt" -> [src,tgt]
-        Map<String, String> nodeType = new HashMap<>(); // jobname -> tipo
-
+        // =====================================================================
+        // Preparar conjuntos de referencia
+        // =====================================================================
         Set<String> initialSet = new HashSet<>();
         for (String[] r : initialJobs) initialSet.add(r[0]);
         Set<String> finalSet = new HashSet<>();
         for (String[] r : finalJobs) finalSet.add(r[0]);
-        Set<String> critSet = new HashSet<>();
-        for (String[] r : criticalJobs) critSet.add(r[0]);
 
-        List<String> seeds = new ArrayList<>();
+        // =====================================================================
+        // Determinar seeds
+        // =====================================================================
+        Set<String> seedSet = new LinkedHashSet<>();
         if (seedJob != null && !seedJob.isEmpty()) {
             String upper = seedJob.toUpperCase();
             if (resolvedJobs.containsKey(upper)) {
-                seeds.add(upper);
+                seedSet.add(upper);
             } else {
                 System.out.println("[WARN] Job semilla '" + seedJob + "' no encontrado. Usando jobs iniciales.");
-                for (String[] r : initialJobs) seeds.add(r[0]);
+                for (String[] r : initialJobs) seedSet.add(r[0]);
             }
         } else {
-            for (String[] r : initialJobs) seeds.add(r[0]);
+            for (String[] r : initialJobs) seedSet.add(r[0]);
         }
 
-        // BFS FORWARD
-        Set<String> visited = new HashSet<>();
-        Queue<String[]> queue = new LinkedList<>(); // [jobname, depthLevel]
-        for (String s : seeds) {
-            queue.add(new String[]{s, "0"});
-            visited.add(s);
-        }
-        while (!queue.isEmpty()) {
-            String[] cur = queue.poll();
-            String jn = cur[0];
-            int d = Integer.parseInt(cur[1]);
-            visitedNodes.add(jn);
-            if (d < depth) {
-                Set<String> nexts = graphForward.get(jn);
-                if (nexts != null) {
-                    for (String next : nexts) {
-                        String ek = jn + "->" + next;
-                        edgesCollected.put(ek, new String[]{jn, next});
-                        if (!visited.contains(next)) {
-                            visited.add(next);
-                            queue.add(new String[]{next, String.valueOf(d + 1)});
+        // =====================================================================
+        // BFS BIDIRECCIONAL: recolectar nodos y aristas
+        // Trackear la dirección de cada arista (forward vs backward)
+        // =====================================================================
+        Set<String> visitedNodes = new LinkedHashSet<>();
+        // edges: key="src|tgt", value=[src, tgt, direction]  direction="fwd" o "bck"
+        Map<String, String[]> edgesCollected = new LinkedHashMap<>();
+
+        // --- BFS FORWARD ---
+        {
+            Set<String> visited = new HashSet<>(seedSet);
+            Queue<String[]> queue = new LinkedList<>();
+            for (String s : seedSet) {
+                queue.add(new String[]{s, "0"});
+                visitedNodes.add(s);
+            }
+            while (!queue.isEmpty()) {
+                String[] cur = queue.poll();
+                String jn = cur[0];
+                int d = Integer.parseInt(cur[1]);
+                visitedNodes.add(jn);
+                if (d < depth) {
+                    Set<String> nexts = graphForward.get(jn);
+                    if (nexts != null) {
+                        for (String next : nexts) {
+                            String ek = jn + "|" + next;
+                            if (!edgesCollected.containsKey(ek)) {
+                                edgesCollected.put(ek, new String[]{jn, next, "fwd"});
+                            }
+                            if (!visited.contains(next)) {
+                                visited.add(next);
+                                visitedNodes.add(next);
+                                queue.add(new String[]{next, String.valueOf(d + 1)});
+                            }
                         }
                     }
                 }
             }
         }
 
-        // BFS BACKWARD
-        visited.clear();
-        for (String s : seeds) {
-            queue.add(new String[]{s, "0"});
-            visited.add(s);
-        }
-        while (!queue.isEmpty()) {
-            String[] cur = queue.poll();
-            String jn = cur[0];
-            int d = Integer.parseInt(cur[1]);
-            visitedNodes.add(jn);
-            if (d < depth) {
-                Set<String> preds = graphBackward.get(jn);
-                if (preds != null) {
-                    for (String pred : preds) {
-                        String ek = pred + "->" + jn;
-                        edgesCollected.put(ek, new String[]{pred, jn});
-                        if (!visited.contains(pred)) {
-                            visited.add(pred);
-                            queue.add(new String[]{pred, String.valueOf(d + 1)});
+        // --- BFS BACKWARD ---
+        {
+            Set<String> visited = new HashSet<>(seedSet);
+            Queue<String[]> queue = new LinkedList<>();
+            for (String s : seedSet) {
+                queue.add(new String[]{s, "0"});
+            }
+            while (!queue.isEmpty()) {
+                String[] cur = queue.poll();
+                String jn = cur[0];
+                int d = Integer.parseInt(cur[1]);
+                visitedNodes.add(jn);
+                if (d < depth) {
+                    Set<String> preds = graphBackward.get(jn);
+                    if (preds != null) {
+                        for (String pred : preds) {
+                            // La arista va de pred -> jn (pred produce, jn consume)
+                            String ek = pred + "|" + jn;
+                            if (!edgesCollected.containsKey(ek)) {
+                                edgesCollected.put(ek, new String[]{pred, jn, "bck"});
+                            }
+                            if (!visited.contains(pred)) {
+                                visited.add(pred);
+                                visitedNodes.add(pred);
+                                queue.add(new String[]{pred, String.valueOf(d + 1)});
+                            }
                         }
                     }
                 }
             }
-        }
-
-        // Clasificar nodos
-        for (String n : visitedNodes) {
-            if (initialSet.contains(n)) nodeType.put(n, "initial");
-            else if (finalSet.contains(n)) nodeType.put(n, "final");
-            else if (critSet.contains(n)) nodeType.put(n, "critical");
-            else nodeType.put(n, "normal");
-            // Marcar seeds
-            if (seeds.contains(n)) nodeType.put(n, "seed");
         }
 
         System.out.println("[INFO] Visor: " + visitedNodes.size() + " nodos, " + edgesCollected.size() + " aristas");
 
-        // Generar HTML con Three.js embebido
+        if (visitedNodes.isEmpty()) {
+            System.out.println("[WARN] No se encontraron nodos para el visor. Verifica el job semilla.");
+            // Generar HTML vacio con mensaje
+            String emptyHtml = "<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Sin datos</title></head>"
+                + "<body style='background:#000;color:#f00;padding:40px;font-family:monospace'>"
+                + "<h1>No se encontraron nodos para visualizar</h1>"
+                + "<p>El job semilla '" + esc(seedJob) + "' no tiene conexiones en el grafo.</p>"
+                + "</body></html>";
+            Files.write(Paths.get(dir + "/09_VISOR_3D.html"), emptyHtml.getBytes(StandardCharsets.UTF_8));
+            return;
+        }
+
+        // =====================================================================
+        // Generar HTML
+        // =====================================================================
         StringBuilder sb = new StringBuilder();
         sb.append("<!DOCTYPE html>\n<html lang=\"es\">\n<head>\n<meta charset=\"UTF-8\">\n");
-        sb.append("<title>Visor 3D de Dependencias</title>\n");
+        sb.append("<title>Visor 3D de Dependencias - Malla de Jobs</title>\n");
         sb.append("<style>\n");
         sb.append("*{margin:0;padding:0;box-sizing:border-box;}\n");
-        sb.append("body{background:#000;overflow:hidden;font-family:monospace;}\n");
+        sb.append("body{background:#000810;overflow:hidden;font-family:'Courier New',monospace;}\n");
         sb.append("canvas{display:block;}\n");
-        sb.append("#info{position:absolute;top:10px;left:10px;color:#0f0;font-size:12px;background:rgba(0,0,0,0.7);padding:10px;border-radius:6px;pointer-events:none;z-index:10;}\n");
-        sb.append("#tooltip{position:absolute;display:none;color:#fff;background:rgba(0,0,30,0.9);border:1px solid #0af;padding:8px 12px;border-radius:4px;font-size:13px;pointer-events:none;z-index:20;max-width:400px;}\n");
-        sb.append("#controls{position:absolute;bottom:10px;left:10px;color:#0f0;font-size:11px;background:rgba(0,0,0,0.7);padding:8px;border-radius:6px;z-index:10;}\n");
-        sb.append("#legend{position:absolute;top:10px;right:10px;color:#ccc;font-size:11px;background:rgba(0,0,0,0.7);padding:10px;border-radius:6px;z-index:10;}\n");
-        sb.append(".leg-item{display:flex;align-items:center;gap:6px;margin:3px 0;}\n");
-        sb.append(".leg-dot{width:10px;height:10px;border-radius:50%;}\n");
+        sb.append("#info{position:absolute;top:10px;left:10px;color:#0fa;font-size:12px;background:rgba(0,0,20,0.85);padding:12px 16px;border-radius:8px;border:1px solid #0fa;pointer-events:none;z-index:10;line-height:1.6;}\n");
+        sb.append("#tooltip{position:absolute;display:none;color:#fff;background:rgba(0,5,30,0.95);border:1px solid #0af;padding:10px 14px;border-radius:6px;font-size:12px;pointer-events:none;z-index:20;max-width:450px;line-height:1.5;}\n");
+        sb.append("#tooltip b{color:#0fa;}\n");
+        sb.append("#legend{position:absolute;top:10px;right:10px;color:#ccc;font-size:11px;background:rgba(0,0,20,0.85);padding:12px;border-radius:8px;border:1px solid #335;z-index:10;line-height:1.8;}\n");
+        sb.append(".leg-item{display:flex;align-items:center;gap:8px;margin:2px 0;}\n");
+        sb.append(".leg-dot{width:12px;height:12px;border-radius:50%;border:1px solid rgba(255,255,255,0.3);}\n");
+        sb.append(".leg-line{width:24px;height:3px;border-radius:2px;}\n");
         sb.append("#search-box{position:absolute;top:10px;left:50%;transform:translateX(-50%);z-index:10;}\n");
-        sb.append("#search-box input{background:rgba(0,0,0,0.8);border:1px solid #0af;color:#fff;padding:6px 12px;border-radius:4px;font-family:monospace;width:300px;font-size:13px;}\n");
+        sb.append("#search-box input{background:rgba(0,5,20,0.9);border:1px solid #0af;color:#fff;padding:8px 14px;border-radius:6px;font-family:'Courier New',monospace;width:320px;font-size:13px;}\n");
+        sb.append("#controls{position:absolute;bottom:10px;left:10px;color:#888;font-size:10px;background:rgba(0,0,20,0.7);padding:8px 12px;border-radius:6px;z-index:10;}\n");
         sb.append("</style>\n</head>\n<body>\n");
 
-        sb.append("<div id=\"info\">Nodos: " + visitedNodes.size() + " | Aristas: " + edgesCollected.size());
-        if (seedJob != null && !seedJob.isEmpty()) sb.append(" | Semilla: " + seedJob.toUpperCase());
-        sb.append(" | Profundidad: &plusmn;" + depth);
+        // Info panel
+        sb.append("<div id=\"info\">\n");
+        sb.append("  <b>VISOR DE DEPENDENCIAS 3D</b><br>\n");
+        sb.append("  Nodos: " + visitedNodes.size() + " | Aristas: " + edgesCollected.size() + "<br>\n");
+        if (seedJob != null && !seedJob.isEmpty()) {
+            sb.append("  Semilla: <span style=\"color:#f0f;font-weight:bold\">" + esc(seedJob.toUpperCase()) + "</span><br>\n");
+        }
+        sb.append("  Profundidad: &plusmn;" + depth + "\n");
         sb.append("</div>\n");
 
         sb.append("<div id=\"tooltip\"></div>\n");
+        sb.append("<div id=\"search-box\"><input type=\"text\" id=\"searchInput\" placeholder=\"Buscar jobname y presionar Enter...\"></div>\n");
 
-        sb.append("<div id=\"search-box\"><input type=\"text\" id=\"searchInput\" placeholder=\"Buscar jobname...\"></div>\n");
-
+        // Legend
         sb.append("<div id=\"legend\">\n");
-        sb.append("<b>Leyenda:</b><br>\n");
-        sb.append("<div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ff00ff\"></div> Semilla</div>\n");
-        sb.append("<div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#00ff88\"></div> Inicial</div>\n");
-        sb.append("<div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ff8800\"></div> Final</div>\n");
-        sb.append("<div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ff0044\"></div> Critico</div>\n");
-        sb.append("<div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#0088ff\"></div> Normal</div>\n");
+        sb.append("  <b style=\"color:#0fa\">&#9632; LEYENDA</b><br>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ff00ff;width:16px;height:16px;\"></div> <b>Semilla</b> (nodo grande)</div>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#ffdd00\"></div> Inicial (sin predecesores)</div>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#4488ff\"></div> Final (sin sucesores)</div>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-dot\" style=\"background:#00cc88\"></div> Normal</div>\n");
+        sb.append("  <hr style=\"border-color:#333;margin:4px 0\">\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-line\" style=\"background:#00cc66\"></div> Arista forward (+)</div>\n");
+        sb.append("  <div class=\"leg-item\"><div class=\"leg-line\" style=\"background:#ff6622\"></div> Arista backward (-)</div>\n");
         sb.append("</div>\n");
 
-        sb.append("<div id=\"controls\">\n");
-        sb.append("Arrastrar: Rotar | Scroll: Zoom | Click: Info\n");
-        sb.append("</div>\n");
+        sb.append("<div id=\"controls\">Arrastrar: Rotar &nbsp;|&nbsp; Scroll: Zoom &nbsp;|&nbsp; Hover: Info del nodo &nbsp;|&nbsp; Enter en busqueda: Ir al nodo</div>\n");
 
-        // Datos JSON inlined
+        // =====================================================================
+        // Inline data as JSON
+        // =====================================================================
         sb.append("<script>\n");
-        sb.append("var GRAPH_DATA = {\n");
-        sb.append("  nodes: [\n");
-        int idx = 0;
-        Map<String, Integer> nodeIdx = new HashMap<>();
-        for (String n : visitedNodes) {
-            nodeIdx.put(n, idx);
-            String type = nodeType.containsKey(n) ? nodeType.get(n) : "normal";
-            Job j = resolvedJobs.get(n);
-            int inC = j != null ? j.inCond.size() : 0;
-            int outC = j != null ? j.outCond.size() : 0;
-            String dc = j != null ? j.datacenter : "N/A";
-            if (idx > 0) sb.append(",\n");
-            sb.append("    {id:\"" + esc(n) + "\",type:\"" + type + "\",inC:" + inC + ",outC:" + outC + ",dc:\"" + esc(dc) + "\"}");
-            idx++;
+        sb.append("var SEED_SET={");
+        {
+            int si = 0;
+            for (String s : seedSet) {
+                if (si > 0) sb.append(",");
+                sb.append("\"" + esc(s) + "\":1");
+                si++;
+            }
         }
-        sb.append("\n  ],\n  edges: [\n");
-        int ei = 0;
-        for (String[] e : edgesCollected.values()) {
-            if (ei > 0) sb.append(",\n");
-            sb.append("    {s:\"" + esc(e[0]) + "\",t:\"" + esc(e[1]) + "\"}");
-            ei++;
-        }
-        sb.append("\n  ]\n};\n");
-        sb.append("</script>\n");
+        sb.append("};\n");
 
-        // Three.js (r128 minificado inline seria enorme, usamos CDN como fallback)
-        // Per user request, no external CSS/frameworks, but Three.js IS javascript, not a framework. It's a library.
-        // We'll load three.js from CDN but provide a fallback message.
+        sb.append("var INITIAL_SET={");
+        {
+            // Only include initials that are in visitedNodes
+            int si = 0;
+            for (String s : initialSet) {
+                if (visitedNodes.contains(s)) {
+                    if (si > 0) sb.append(",");
+                    sb.append("\"" + esc(s) + "\":1");
+                    si++;
+                }
+            }
+        }
+        sb.append("};\n");
+
+        sb.append("var FINAL_SET={");
+        {
+            int si = 0;
+            for (String s : finalSet) {
+                if (visitedNodes.contains(s)) {
+                    if (si > 0) sb.append(",");
+                    sb.append("\"" + esc(s) + "\":1");
+                    si++;
+                }
+            }
+        }
+        sb.append("};\n\n");
+
+        sb.append("var NODES=[\n");
+        {
+            int idx = 0;
+            for (String n : visitedNodes) {
+                Job j = resolvedJobs.get(n);
+                int inC = j != null ? j.inCond.size() : 0;
+                int outC = j != null ? j.outCond.size() : 0;
+                String dc = j != null ? j.datacenter : "N/A";
+                String mem = j != null ? j.memname : "";
+                if (idx > 0) sb.append(",\n");
+                sb.append("  {id:\"" + esc(n) + "\",inC:" + inC + ",outC:" + outC + ",dc:\"" + esc(dc) + "\",mem:\"" + esc(mem) + "\"}");
+                idx++;
+            }
+        }
+        sb.append("\n];\n\n");
+
+        sb.append("var EDGES=[\n");
+        {
+            int ei = 0;
+            for (String[] e : edgesCollected.values()) {
+                if (ei > 0) sb.append(",\n");
+                sb.append("  {s:\"" + esc(e[0]) + "\",t:\"" + esc(e[1]) + "\",d:\"" + e[2] + "\"}");
+                ei++;
+            }
+        }
+        sb.append("\n];\n");
+        sb.append("</script>\n\n");
+
+        // =====================================================================
+        // Three.js from CDN
+        // =====================================================================
         sb.append("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js\"></script>\n");
         sb.append("<script>\n");
-        sb.append("if(typeof THREE==='undefined'){document.body.innerHTML='<div style=\"color:red;padding:40px\">Error: No se pudo cargar Three.js. Requiere conexion a internet para CDN.</div>';}\n");
-        sb.append("</script>\n");
+        sb.append("if(typeof THREE==='undefined'){\n");
+        sb.append("  document.body.innerHTML='<div style=\"color:#f44;padding:40px;font-family:monospace;font-size:16px\">");
+        sb.append("Error: No se pudo cargar Three.js.<br>Requiere conexion a internet para cargar desde CDN.<br><br>");
+        sb.append("Alternativa: descarga three.min.js r128 y ponlo junto a este HTML.</div>';\n");
+        sb.append("}\n");
+        sb.append("</script>\n\n");
 
-        // Rendering script
+        // =====================================================================
+        // Main rendering script
+        // =====================================================================
         sb.append("<script>\n");
         sb.append("(function(){\n");
         sb.append("if(typeof THREE==='undefined') return;\n\n");
 
         sb.append("var W=window.innerWidth, H=window.innerHeight;\n");
         sb.append("var scene=new THREE.Scene();\n");
-        sb.append("scene.background=new THREE.Color(0x000011);\n");
-        sb.append("var camera=new THREE.PerspectiveCamera(60,W/H,1,50000);\n");
-        sb.append("camera.position.set(0,0,500);\n");
+        sb.append("scene.background=new THREE.Color(0x000810);\n");
+        sb.append("var camera=new THREE.PerspectiveCamera(60,W/H,0.5,100000);\n");
         sb.append("var renderer=new THREE.WebGLRenderer({antialias:true});\n");
         sb.append("renderer.setSize(W,H);\n");
+        sb.append("renderer.setPixelRatio(window.devicePixelRatio);\n");
         sb.append("document.body.appendChild(renderer.domElement);\n\n");
 
         // Colors
-        sb.append("var COLORS={seed:0xff00ff,initial:0x00ff88,'final':0xff8800,critical:0xff0044,normal:0x0088ff};\n\n");
+        sb.append("var COL_SEED=0xff00ff;\n");
+        sb.append("var COL_INITIAL=0xffdd00;\n");
+        sb.append("var COL_FINAL=0x4488ff;\n");
+        sb.append("var COL_NORMAL=0x00cc88;\n");
+        sb.append("var COL_EDGE_FWD=0x00cc66;\n");
+        sb.append("var COL_EDGE_BCK=0xff6622;\n\n");
 
-        // Create nodes as spheres
-        sb.append("var nodes=GRAPH_DATA.nodes;\n");
-        sb.append("var edges=GRAPH_DATA.edges;\n");
-        sb.append("var nodeMeshes=[];\n");
+        sb.append("function getNodeColor(id){\n");
+        sb.append("  if(SEED_SET[id]) return COL_SEED;\n");
+        sb.append("  if(INITIAL_SET[id]) return COL_INITIAL;\n");
+        sb.append("  if(FINAL_SET[id]) return COL_FINAL;\n");
+        sb.append("  return COL_NORMAL;\n");
+        sb.append("}\n");
+        sb.append("function getNodeType(id){\n");
+        sb.append("  if(SEED_SET[id]) return 'SEMILLA';\n");
+        sb.append("  if(INITIAL_SET[id]) return 'INICIAL';\n");
+        sb.append("  if(FINAL_SET[id]) return 'FINAL';\n");
+        sb.append("  return 'NORMAL';\n");
+        sb.append("}\n");
+        sb.append("function getNodeSize(id,inC,outC){\n");
+        sb.append("  if(SEED_SET[id]) return 6;\n");
+        sb.append("  return Math.max(1.5, Math.min(4.5, Math.log2(1+inC+outC)));\n");
+        sb.append("}\n\n");
+
+        // Setup node data with initial positions
+        sb.append("var N=NODES.length;\n");
         sb.append("var nodeMap={};\n");
-        sb.append("var nodePositions={};\n\n");
+        sb.append("var spread=Math.max(300, Math.sqrt(N)*20);\n\n");
 
-        // Layout: force-directed simple (initial placement then iterate)
-        sb.append("// Initial placement: random sphere\n");
-        sb.append("var N=nodes.length;\n");
-        sb.append("var spread=Math.max(200, Math.sqrt(N)*15);\n");
         sb.append("for(var i=0;i<N;i++){\n");
-        sb.append("  var n=nodes[i];\n");
+        sb.append("  var n=NODES[i];\n");
         sb.append("  var phi=Math.acos(2*Math.random()-1);\n");
         sb.append("  var theta=2*Math.PI*Math.random();\n");
-        sb.append("  var r=spread*(0.3+0.7*Math.random());\n");
+        sb.append("  var r=spread*(0.2+0.8*Math.random());\n");
         sb.append("  n.x=r*Math.sin(phi)*Math.cos(theta);\n");
         sb.append("  n.y=r*Math.sin(phi)*Math.sin(theta);\n");
         sb.append("  n.z=r*Math.cos(phi);\n");
@@ -772,119 +853,156 @@ public class JobAnalyzer {
         sb.append("  nodeMap[n.id]=n;\n");
         sb.append("}\n\n");
 
-        // Build adjacency for layout
+        // If seed exists, center it
+        sb.append("for(var key in SEED_SET){\n");
+        sb.append("  if(nodeMap[key]){nodeMap[key].x=0;nodeMap[key].y=0;nodeMap[key].z=0;}\n");
+        sb.append("}\n\n");
+
+        // Build adjacency
         sb.append("var adj={};\n");
-        sb.append("for(var i=0;i<edges.length;i++){\n");
-        sb.append("  var e=edges[i];\n");
+        sb.append("for(var i=0;i<EDGES.length;i++){\n");
+        sb.append("  var e=EDGES[i];\n");
         sb.append("  if(!adj[e.s])adj[e.s]=[];\n");
         sb.append("  if(!adj[e.t])adj[e.t]=[];\n");
         sb.append("  adj[e.s].push(e.t);\n");
         sb.append("  adj[e.t].push(e.s);\n");
         sb.append("}\n\n");
 
-        // Force-directed layout iterations (run synchronously for small graphs, async for large)
-        sb.append("var ITERATIONS=N>5000?80:N>1000?150:300;\n");
-        sb.append("var repulsion=N>5000?800:N>1000?500:300;\n");
-        sb.append("var attraction=0.005;\n");
-        sb.append("var damping=0.9;\n\n");
+        // Force-directed layout
+        sb.append("var ITERS=N>5000?60:N>1000?120:N>200?200:300;\n");
+        sb.append("var repK=N>5000?1200:N>1000?800:500;\n");
+        sb.append("var attrK=0.004;\n");
+        sb.append("var damp=0.88;\n\n");
 
-        sb.append("function runLayout(iters){\n");
-        sb.append("  for(var iter=0;iter<iters;iter++){\n");
-        sb.append("    var dt=0.3;\n");
-        // Repulsion (Barnes-Hut approximation for large N: simple grid)
-        // For simplicity and correctness, use direct O(N^2) but cap at 5000 nodes
-        sb.append("    if(N<=5000){\n");
-        sb.append("      for(var i=0;i<N;i++){\n");
-        sb.append("        for(var j=i+1;j<N;j++){\n");
-        sb.append("          var dx=nodes[i].x-nodes[j].x;\n");
-        sb.append("          var dy=nodes[i].y-nodes[j].y;\n");
-        sb.append("          var dz=nodes[i].z-nodes[j].z;\n");
-        sb.append("          var d2=dx*dx+dy*dy+dz*dz+1;\n");
-        sb.append("          var f=repulsion/d2;\n");
-        sb.append("          var d=Math.sqrt(d2);\n");
-        sb.append("          var fx=f*dx/d, fy=f*dy/d, fz=f*dz/d;\n");
-        sb.append("          nodes[i].vx+=fx;nodes[i].vy+=fy;nodes[i].vz+=fz;\n");
-        sb.append("          nodes[j].vx-=fx;nodes[j].vy-=fy;nodes[j].vz-=fz;\n");
-        sb.append("        }\n");
-        sb.append("      }\n");
-        sb.append("    } else {\n");
-        // For large N, use only neighbor repulsion + random sample
-        sb.append("      for(var i=0;i<N;i++){\n");
-        sb.append("        var neighbors=adj[nodes[i].id]||[];\n");
-        sb.append("        for(var k=0;k<neighbors.length;k++){\n");
-        sb.append("          var nb=nodeMap[neighbors[k]];\n");
-        sb.append("          if(!nb)continue;\n");
-        sb.append("          var dx=nodes[i].x-nb.x,dy=nodes[i].y-nb.y,dz=nodes[i].z-nb.z;\n");
-        sb.append("          var d2=dx*dx+dy*dy+dz*dz+1;\n");
-        sb.append("          var f=repulsion*2/d2;\n");
-        sb.append("          var d=Math.sqrt(d2);\n");
-        sb.append("          nodes[i].vx+=f*dx/d;nodes[i].vy+=f*dy/d;nodes[i].vz+=f*dz/d;\n");
-        sb.append("        }\n");
-        sb.append("        // random sample repulsion\n");
-        sb.append("        for(var s=0;s<5;s++){\n");
-        sb.append("          var j=Math.floor(Math.random()*N);\n");
-        sb.append("          if(j===i)continue;\n");
-        sb.append("          var dx=nodes[i].x-nodes[j].x,dy=nodes[i].y-nodes[j].y,dz=nodes[i].z-nodes[j].z;\n");
-        sb.append("          var d2=dx*dx+dy*dy+dz*dz+1;\n");
-        sb.append("          var f=repulsion/d2;\n");
-        sb.append("          var d=Math.sqrt(d2);\n");
-        sb.append("          nodes[i].vx+=f*dx/d;nodes[i].vy+=f*dy/d;nodes[i].vz+=f*dz/d;\n");
-        sb.append("        }\n");
-        sb.append("      }\n");
-        sb.append("    }\n");
-        // Attraction
-        sb.append("    for(var i=0;i<edges.length;i++){\n");
-        sb.append("      var sn=nodeMap[edges[i].s],tn=nodeMap[edges[i].t];\n");
-        sb.append("      if(!sn||!tn)continue;\n");
-        sb.append("      var dx=tn.x-sn.x,dy=tn.y-sn.y,dz=tn.z-sn.z;\n");
-        sb.append("      var d=Math.sqrt(dx*dx+dy*dy+dz*dz)+0.1;\n");
-        sb.append("      var f=attraction*d;\n");
-        sb.append("      sn.vx+=f*dx/d;sn.vy+=f*dy/d;sn.vz+=f*dz/d;\n");
-        sb.append("      tn.vx-=f*dx/d;tn.vy-=f*dy/d;tn.vz-=f*dz/d;\n");
-        sb.append("    }\n");
-        // Update positions
+        sb.append("console.log('Layout: '+N+' nodos, '+EDGES.length+' aristas, '+ITERS+' iteraciones');\n");
+        sb.append("var t0=performance.now();\n\n");
+
+        sb.append("for(var iter=0;iter<ITERS;iter++){\n");
+        // Repulsion
+        sb.append("  if(N<=3000){\n");
         sb.append("    for(var i=0;i<N;i++){\n");
-        sb.append("      nodes[i].vx*=damping;nodes[i].vy*=damping;nodes[i].vz*=damping;\n");
-        sb.append("      nodes[i].x+=nodes[i].vx*dt;\n");
-        sb.append("      nodes[i].y+=nodes[i].vy*dt;\n");
-        sb.append("      nodes[i].z+=nodes[i].vz*dt;\n");
+        sb.append("      for(var j=i+1;j<N;j++){\n");
+        sb.append("        var dx=NODES[i].x-NODES[j].x,dy=NODES[i].y-NODES[j].y,dz=NODES[i].z-NODES[j].z;\n");
+        sb.append("        var d2=dx*dx+dy*dy+dz*dz+1;\n");
+        sb.append("        var f=repK/d2;\n");
+        sb.append("        var d=Math.sqrt(d2);\n");
+        sb.append("        var fx=f*dx/d,fy=f*dy/d,fz=f*dz/d;\n");
+        sb.append("        NODES[i].vx+=fx;NODES[i].vy+=fy;NODES[i].vz+=fz;\n");
+        sb.append("        NODES[j].vx-=fx;NODES[j].vy-=fy;NODES[j].vz-=fz;\n");
+        sb.append("      }\n");
         sb.append("    }\n");
+        sb.append("  } else {\n");
+        sb.append("    for(var i=0;i<N;i++){\n");
+        sb.append("      var nb=adj[NODES[i].id]||[];\n");
+        sb.append("      for(var k=0;k<nb.length;k++){\n");
+        sb.append("        var other=nodeMap[nb[k]];\n");
+        sb.append("        if(!other)continue;\n");
+        sb.append("        var dx=NODES[i].x-other.x,dy=NODES[i].y-other.y,dz=NODES[i].z-other.z;\n");
+        sb.append("        var d2=dx*dx+dy*dy+dz*dz+1;\n");
+        sb.append("        var f=repK*3/d2;\n");
+        sb.append("        var d=Math.sqrt(d2);\n");
+        sb.append("        NODES[i].vx+=f*dx/d;NODES[i].vy+=f*dy/d;NODES[i].vz+=f*dz/d;\n");
+        sb.append("      }\n");
+        sb.append("      for(var s=0;s<8;s++){\n");
+        sb.append("        var j=Math.floor(Math.random()*N);\n");
+        sb.append("        if(j===i)continue;\n");
+        sb.append("        var dx=NODES[i].x-NODES[j].x,dy=NODES[i].y-NODES[j].y,dz=NODES[i].z-NODES[j].z;\n");
+        sb.append("        var d2=dx*dx+dy*dy+dz*dz+1;\n");
+        sb.append("        var f=repK/d2;\n");
+        sb.append("        var d=Math.sqrt(d2);\n");
+        sb.append("        NODES[i].vx+=f*dx/d;NODES[i].vy+=f*dy/d;NODES[i].vz+=f*dz/d;\n");
+        sb.append("      }\n");
+        sb.append("    }\n");
+        sb.append("  }\n");
+        // Attraction along edges
+        sb.append("  for(var i=0;i<EDGES.length;i++){\n");
+        sb.append("    var sn=nodeMap[EDGES[i].s],tn=nodeMap[EDGES[i].t];\n");
+        sb.append("    if(!sn||!tn)continue;\n");
+        sb.append("    var dx=tn.x-sn.x,dy=tn.y-sn.y,dz=tn.z-sn.z;\n");
+        sb.append("    var d=Math.sqrt(dx*dx+dy*dy+dz*dz)+0.1;\n");
+        sb.append("    var f=attrK*d;\n");
+        sb.append("    sn.vx+=f*dx/d;sn.vy+=f*dy/d;sn.vz+=f*dz/d;\n");
+        sb.append("    tn.vx-=f*dx/d;tn.vy-=f*dy/d;tn.vz-=f*dz/d;\n");
+        sb.append("  }\n");
+        // Update positions
+        sb.append("  for(var i=0;i<N;i++){\n");
+        sb.append("    NODES[i].vx*=damp;NODES[i].vy*=damp;NODES[i].vz*=damp;\n");
+        sb.append("    NODES[i].x+=NODES[i].vx*0.3;\n");
+        sb.append("    NODES[i].y+=NODES[i].vy*0.3;\n");
+        sb.append("    NODES[i].z+=NODES[i].vz*0.3;\n");
         sb.append("  }\n");
         sb.append("}\n\n");
 
-        sb.append("runLayout(ITERATIONS);\n\n");
+        sb.append("console.log('Layout completado en '+(performance.now()-t0).toFixed(0)+'ms');\n\n");
 
+        // =====================================================================
         // Create Three.js objects
-        sb.append("// Create sphere meshes\n");
-        sb.append("var sphereGeo=new THREE.SphereGeometry(1,8,8);\n");
+        // =====================================================================
+        sb.append("var nodeMeshes=[];\n");
+        sb.append("var nodePositions={};\n");
+        sb.append("var labelSprites=[];\n\n");
+
+        // Create text sprite function
+        sb.append("function makeTextSprite(text,color,fontSize){\n");
+        sb.append("  var canvas=document.createElement('canvas');\n");
+        sb.append("  var ctx=canvas.getContext('2d');\n");
+        sb.append("  fontSize=fontSize||28;\n");
+        sb.append("  ctx.font='bold '+fontSize+'px Courier New';\n");
+        sb.append("  var w=ctx.measureText(text).width+8;\n");
+        sb.append("  canvas.width=w; canvas.height=fontSize+8;\n");
+        sb.append("  ctx.font='bold '+fontSize+'px Courier New';\n");
+        sb.append("  ctx.fillStyle=color||'#ffffff';\n");
+        sb.append("  ctx.fillText(text,4,fontSize);\n");
+        sb.append("  var tex=new THREE.CanvasTexture(canvas);\n");
+        sb.append("  tex.minFilter=THREE.LinearFilter;\n");
+        sb.append("  var mat=new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:false});\n");
+        sb.append("  var sprite=new THREE.Sprite(mat);\n");
+        sb.append("  sprite.scale.set(w/fontSize*3, 3, 1);\n");
+        sb.append("  return sprite;\n");
+        sb.append("}\n\n");
+
+        // Create spheres and labels
+        sb.append("var sphereGeo=new THREE.SphereGeometry(1,12,12);\n\n");
         sb.append("for(var i=0;i<N;i++){\n");
-        sb.append("  var n=nodes[i];\n");
-        sb.append("  var col=COLORS[n.type]||COLORS.normal;\n");
+        sb.append("  var n=NODES[i];\n");
+        sb.append("  var col=getNodeColor(n.id);\n");
+        sb.append("  var sz=getNodeSize(n.id,n.inC,n.outC);\n");
         sb.append("  var mat=new THREE.MeshBasicMaterial({color:col});\n");
         sb.append("  var mesh=new THREE.Mesh(sphereGeo,mat);\n");
-        sb.append("  var sz=Math.max(1.5, Math.min(6, Math.log2(1+(n.inC||0)+(n.outC||0))));\n");
         sb.append("  mesh.scale.set(sz,sz,sz);\n");
         sb.append("  mesh.position.set(n.x,n.y,n.z);\n");
-        sb.append("  mesh.userData={id:n.id,type:n.type,inC:n.inC,outC:n.outC,dc:n.dc};\n");
+        sb.append("  mesh.userData={id:n.id,type:getNodeType(n.id),inC:n.inC,outC:n.outC,dc:n.dc,mem:n.mem,origColor:col};\n");
         sb.append("  scene.add(mesh);\n");
         sb.append("  nodeMeshes.push(mesh);\n");
-        sb.append("  nodePositions[n.id]=mesh.position;\n");
+        sb.append("  nodePositions[n.id]=mesh.position;\n\n");
+        // Label
+        sb.append("  var lblColor='#88ccaa';\n");
+        sb.append("  if(SEED_SET[n.id]) lblColor='#ff88ff';\n");
+        sb.append("  else if(INITIAL_SET[n.id]) lblColor='#ffee66';\n");
+        sb.append("  else if(FINAL_SET[n.id]) lblColor='#6699ff';\n");
+        sb.append("  var lbl=makeTextSprite(n.id, lblColor, SEED_SET[n.id]?36:24);\n");
+        sb.append("  lbl.position.set(n.x, n.y+sz+2, n.z);\n");
+        sb.append("  scene.add(lbl);\n");
+        sb.append("  labelSprites.push(lbl);\n");
         sb.append("}\n\n");
 
-        // Create edges as lines
-        sb.append("var edgeMat=new THREE.LineBasicMaterial({color:0x224466,transparent:true,opacity:0.3});\n");
-        sb.append("for(var i=0;i<edges.length;i++){\n");
-        sb.append("  var sp=nodePositions[edges[i].s],tp=nodePositions[edges[i].t];\n");
+        // Create edges as lines with different colors for fwd/bck
+        sb.append("var edgeLineMeshes=[];\n");
+        sb.append("for(var i=0;i<EDGES.length;i++){\n");
+        sb.append("  var e=EDGES[i];\n");
+        sb.append("  var sp=nodePositions[e.s],tp=nodePositions[e.t];\n");
         sb.append("  if(!sp||!tp)continue;\n");
+        sb.append("  var edgeColor=(e.d==='bck')?COL_EDGE_BCK:COL_EDGE_FWD;\n");
+        sb.append("  var opacity=(e.d==='bck')?0.5:0.35;\n");
+        sb.append("  var mat=new THREE.LineBasicMaterial({color:edgeColor,transparent:true,opacity:opacity});\n");
         sb.append("  var geo=new THREE.BufferGeometry().setFromPoints([sp.clone(),tp.clone()]);\n");
-        sb.append("  var line=new THREE.Line(geo,edgeMat);\n");
+        sb.append("  var line=new THREE.Line(geo,mat);\n");
         sb.append("  scene.add(line);\n");
+        sb.append("  edgeLineMeshes.push(line);\n");
         sb.append("}\n\n");
 
-        // Camera controls (manual orbit)
-        sb.append("// Orbit controls\n");
-        sb.append("var isDragging=false,prevX=0,prevY=0;\n");
-        sb.append("var spherical={theta:0,phi:Math.PI/2,radius:spread*2};\n");
+        // Camera orbit
+        sb.append("var spherical={theta:0,phi:Math.PI/2,radius:spread*1.8};\n");
         sb.append("var target=new THREE.Vector3(0,0,0);\n\n");
 
         sb.append("function updateCamera(){\n");
@@ -895,68 +1013,76 @@ public class JobAnalyzer {
         sb.append("}\n");
         sb.append("updateCamera();\n\n");
 
-        sb.append("renderer.domElement.addEventListener('mousedown',function(e){\n");
-        sb.append("  if(e.button===0){isDragging=true;prevX=e.clientX;prevY=e.clientY;}\n");
+        // Mouse controls
+        sb.append("var isDragging=false,prevMX=0,prevMY=0;\n\n");
+
+        sb.append("renderer.domElement.addEventListener('mousedown',function(ev){\n");
+        sb.append("  if(ev.button===0){isDragging=true;prevMX=ev.clientX;prevMY=ev.clientY;}\n");
         sb.append("});\n");
-        sb.append("renderer.domElement.addEventListener('mousemove',function(e){\n");
+        sb.append("renderer.domElement.addEventListener('mousemove',function(ev){\n");
         sb.append("  if(isDragging){\n");
-        sb.append("    var dx=e.clientX-prevX, dy=e.clientY-prevY;\n");
+        sb.append("    var dx=ev.clientX-prevMX, dy=ev.clientY-prevMY;\n");
         sb.append("    spherical.theta-=dx*0.005;\n");
-        sb.append("    spherical.phi=Math.max(0.1,Math.min(Math.PI-0.1,spherical.phi-dy*0.005));\n");
-        sb.append("    prevX=e.clientX;prevY=e.clientY;\n");
+        sb.append("    spherical.phi=Math.max(0.05,Math.min(Math.PI-0.05,spherical.phi-dy*0.005));\n");
+        sb.append("    prevMX=ev.clientX;prevMY=ev.clientY;\n");
         sb.append("    updateCamera();\n");
         sb.append("  }\n");
-        sb.append("  // Hover tooltip\n");
-        sb.append("  checkHover(e);\n");
+        sb.append("  checkHover(ev);\n");
         sb.append("});\n");
         sb.append("renderer.domElement.addEventListener('mouseup',function(){isDragging=false;});\n");
-        sb.append("renderer.domElement.addEventListener('wheel',function(e){\n");
-        sb.append("  spherical.radius=Math.max(10,spherical.radius*(e.deltaY>0?1.1:0.9));\n");
+        sb.append("renderer.domElement.addEventListener('wheel',function(ev){\n");
+        sb.append("  spherical.radius=Math.max(10,spherical.radius*(ev.deltaY>0?1.1:0.9));\n");
         sb.append("  updateCamera();\n");
-        sb.append("});\n\n");
+        sb.append("  ev.preventDefault();\n");
+        sb.append("},{passive:false});\n\n");
 
-        // Raycaster for hover
+        // Raycaster hover
         sb.append("var raycaster=new THREE.Raycaster();\n");
-        sb.append("raycaster.params.Points={threshold:5};\n");
-        sb.append("var mouse=new THREE.Vector2();\n");
+        sb.append("var mouseVec=new THREE.Vector2();\n");
         sb.append("var tooltip=document.getElementById('tooltip');\n\n");
 
-        sb.append("function checkHover(e){\n");
-        sb.append("  mouse.x=(e.clientX/W)*2-1;\n");
-        sb.append("  mouse.y=-(e.clientY/H)*2+1;\n");
-        sb.append("  raycaster.setFromCamera(mouse,camera);\n");
+        sb.append("function checkHover(ev){\n");
+        sb.append("  mouseVec.x=(ev.clientX/W)*2-1;\n");
+        sb.append("  mouseVec.y=-(ev.clientY/H)*2+1;\n");
+        sb.append("  raycaster.setFromCamera(mouseVec,camera);\n");
         sb.append("  var hits=raycaster.intersectObjects(nodeMeshes);\n");
         sb.append("  if(hits.length>0){\n");
         sb.append("    var d=hits[0].object.userData;\n");
         sb.append("    tooltip.style.display='block';\n");
-        sb.append("    tooltip.style.left=(e.clientX+15)+'px';\n");
-        sb.append("    tooltip.style.top=(e.clientY+15)+'px';\n");
-        sb.append("    tooltip.innerHTML='<b>'+d.id+'</b><br>Tipo: '+d.type+'<br>DC: '+d.dc+'<br>InCond: '+d.inC+'<br>OutCond: '+d.outC;\n");
+        sb.append("    tooltip.style.left=(ev.clientX+15)+'px';\n");
+        sb.append("    tooltip.style.top=(ev.clientY-10)+'px';\n");
+        sb.append("    tooltip.innerHTML='<b>'+d.id+'</b><br>'\n");
+        sb.append("      +'Tipo: <b>'+d.type+'</b><br>'\n");
+        sb.append("      +'Datacenter: '+d.dc+'<br>'\n");
+        sb.append("      +'Memname: '+d.mem+'<br>'\n");
+        sb.append("      +'InCond: '+d.inC+' | OutCond: '+d.outC;\n");
         sb.append("  } else {\n");
         sb.append("    tooltip.style.display='none';\n");
         sb.append("  }\n");
         sb.append("}\n\n");
 
-        // Search functionality
-        sb.append("var searchInput=document.getElementById('searchInput');\n");
-        sb.append("searchInput.addEventListener('keydown',function(e){\n");
-        sb.append("  if(e.key==='Enter'){\n");
-        sb.append("    var val=this.value.toUpperCase();\n");
-        sb.append("    // Reset all to original color\n");
+        // Search
+        sb.append("document.getElementById('searchInput').addEventListener('keydown',function(ev){\n");
+        sb.append("  if(ev.key==='Enter'){\n");
+        sb.append("    var val=this.value.toUpperCase().trim();\n");
+        sb.append("    // Reset colors\n");
         sb.append("    for(var i=0;i<nodeMeshes.length;i++){\n");
-        sb.append("      var t=nodeMeshes[i].userData.type;\n");
-        sb.append("      nodeMeshes[i].material.color.setHex(COLORS[t]||COLORS.normal);\n");
+        sb.append("      nodeMeshes[i].material.color.setHex(nodeMeshes[i].userData.origColor);\n");
         sb.append("    }\n");
         sb.append("    if(!val)return;\n");
+        sb.append("    var found=false;\n");
         sb.append("    for(var i=0;i<nodeMeshes.length;i++){\n");
         sb.append("      if(nodeMeshes[i].userData.id.indexOf(val)>=0){\n");
         sb.append("        nodeMeshes[i].material.color.setHex(0xffffff);\n");
-        sb.append("        // Move camera to node\n");
-        sb.append("        target.copy(nodeMeshes[i].position);\n");
-        sb.append("        spherical.radius=100;\n");
-        sb.append("        updateCamera();\n");
+        sb.append("        if(!found){\n");
+        sb.append("          target.copy(nodeMeshes[i].position);\n");
+        sb.append("          spherical.radius=80;\n");
+        sb.append("          updateCamera();\n");
+        sb.append("          found=true;\n");
+        sb.append("        }\n");
         sb.append("      }\n");
         sb.append("    }\n");
+        sb.append("    if(!found){tooltip.style.display='block';tooltip.style.left='50%';tooltip.style.top='60px';tooltip.innerHTML='No encontrado: '+val;setTimeout(function(){tooltip.style.display='none';},2000);}\n");
         sb.append("  }\n");
         sb.append("});\n\n");
 
