@@ -198,11 +198,6 @@ public class FlowAnalyzer {
         List<Job> canonical = selectCanonicalJobs(jobs, brokenPerKey);
         result.canonicalCount = canonical.size();
 
-        Set<String> canonicalNames = new HashSet<String>();
-        for (Job job : canonical) {
-            canonicalNames.add(job.jobname);
-        }
-
         Map<String, Set<String>> providersByCond = new HashMap<String, Set<String>>();
         Map<String, Set<String>> consumersByCond = new HashMap<String, Set<String>>();
         for (Job job : canonical) {
@@ -228,28 +223,21 @@ public class FlowAnalyzer {
                 inbound += providersCount;
 
                 if (providersCount == 0) {
-                    String[] parsed = parseCondition(cond);
                     BrokenReference broken = new BrokenReference();
                     broken.jobname = job.jobname;
                     broken.datacenter = job.datacenter;
                     broken.condition = cond;
-                    broken.expectedFrom = parsed[0].length() == 0 ? "UNKNOWN" : parsed[0];
+                    broken.expectedFrom = "N/A";
                     result.brokenReferences.add(broken);
 
-                    if (parsed[0].length() > 0 && !canonicalNames.contains(parsed[0])) {
-                        missingNames.add(parsed[0]);
-                    }
+                    // Missing planning is reported by full unresolved condition, not inferred jobname.
+                    missingNames.add(cond);
                 }
             }
 
             for (String cond : job.outCond) {
                 Set<String> consumers = consumersByCond.get(cond);
                 outbound += countWithoutSelf(consumers, job.jobname);
-
-                String[] parsed = parseCondition(cond);
-                if (parsed[1].length() > 0 && !canonicalNames.contains(parsed[1])) {
-                    missingNames.add(parsed[1]);
-                }
             }
 
             inboundScore.put(job.jobname, Integer.valueOf(inbound));
@@ -280,7 +268,7 @@ public class FlowAnalyzer {
         result.inboundScore = inboundScore;
         result.outboundScore = outboundScore;
 
-        buildFullGraph(canonical, canonicalNames, result);
+        buildFullGraph(canonical, providersByCond, consumersByCond, result);
         return result;
     }
 
@@ -353,33 +341,38 @@ public class FlowAnalyzer {
         return canonical;
     }
 
-    private void buildFullGraph(List<Job> canonical, Set<String> canonicalNames, AnalysisResult result) {
+    private void buildFullGraph(
+        List<Job> canonical,
+        Map<String, Set<String>> providersByCond,
+        Map<String, Set<String>> consumersByCond,
+        AnalysisResult result
+    ) {
         Set<String> nodes = new LinkedHashSet<String>();
         for (Job job : canonical) {
             nodes.add(job.jobname);
         }
 
         Set<String> edgeKeys = new HashSet<String>();
-        for (Job job : canonical) {
-            for (String cond : job.outCond) {
-                String[] parsed = parseCondition(cond);
-                String source = parsed[0];
-                String target = parsed[1];
-                if (source.length() == 0 || target.length() == 0) {
-                    continue;
+        for (Map.Entry<String, Set<String>> entry : providersByCond.entrySet()) {
+            String condition = entry.getKey();
+            Set<String> providers = entry.getValue();
+            Set<String> consumers = consumersByCond.get(condition);
+            if (consumers == null || consumers.isEmpty()) {
+                continue;
+            }
+
+            for (String source : providers) {
+                for (String target : consumers) {
+                    if (source.equals(target)) {
+                        continue;
+                    }
+                    String key = source + "->" + target;
+                    if (edgeKeys.contains(key)) {
+                        continue;
+                    }
+                    edgeKeys.add(key);
+                    result.mapEdges.add(new Edge(source, target));
                 }
-                if (!canonicalNames.contains(source) || !canonicalNames.contains(target)) {
-                    continue;
-                }
-                if (source.equals(target)) {
-                    continue;
-                }
-                String key = source + "->" + target;
-                if (edgeKeys.contains(key)) {
-                    continue;
-                }
-                edgeKeys.add(key);
-                result.mapEdges.add(new Edge(source, target));
             }
         }
 
@@ -424,19 +417,6 @@ public class FlowAnalyzer {
             return "";
         }
         return value.trim();
-    }
-
-    private static String[] parseCondition(String cond) {
-        if (cond == null) {
-            return new String[] {"", ""};
-        }
-        int idx = cond.indexOf('-');
-        if (idx < 0) {
-            return new String[] {cond.trim(), ""};
-        }
-        String from = cond.substring(0, idx).trim();
-        String to = cond.substring(idx + 1).trim();
-        return new String[] {from, to};
     }
 
     private static int countWithoutSelf(Set<String> set, String self) {

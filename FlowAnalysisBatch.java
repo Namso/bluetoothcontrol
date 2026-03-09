@@ -56,7 +56,7 @@ public class FlowAnalysisBatch {
         sb.append("Jobs iniciadores: ").append(result.totalStarters).append("\n");
         sb.append("Jobs finales: ").append(result.totalFinals).append("\n");
         sb.append("Referencias rotas: ").append(result.totalBrokenReferences).append("\n");
-        sb.append("Jobs faltantes: ").append(result.totalMissingJobs).append("\n");
+        sb.append("Condiciones faltantes: ").append(result.totalMissingJobs).append("\n");
         sb.append("Nodos malla: ").append(result.mapNodes.size()).append("\n");
         sb.append("Aristas malla: ").append(result.mapEdges.size()).append("\n\n");
 
@@ -161,7 +161,7 @@ public class FlowAnalysisBatch {
         html.append("<div class=\"grid\">\n");
         html.append("<div class=\"box\"><h2>Iniciadores</h2><ul id=\"starters\"></ul></div>\n");
         html.append("<div class=\"box\"><h2>Finales</h2><ul id=\"finals\"></ul></div>\n");
-        html.append("<div class=\"box\"><h2>Jobs faltantes</h2><ul id=\"missing\"></ul></div>\n");
+        html.append("<div class=\"box\"><h2>Condiciones faltantes</h2><ul id=\"missing\"></ul></div>\n");
         html.append("</div>\n");
         html.append("</div>\n");
         html.append("<script>\n");
