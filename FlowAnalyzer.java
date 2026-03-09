@@ -1,6 +1,6 @@
 import org.json.JSONArray;
-import org.json.JSONTokener;
 import org.json.JSONObject;
+import org.json.JSONTokener;
 
 import java.io.BufferedInputStream;
 import java.io.FileInputStream;
@@ -17,11 +17,6 @@ import java.util.Map;
 import java.util.Set;
 
 public class FlowAnalyzer {
-
-    private static final int MAX_STARTERS_DETAILS = 2000;
-    private static final int MAX_FINALS_DETAILS = 2000;
-    private static final int MAX_BROKEN_DETAILS = 5000;
-    private static final int MAX_MISSING_DETAILS = 5000;
 
     public static class Job {
         String key;
@@ -100,6 +95,8 @@ public class FlowAnalyzer {
         List<ScoredJob> topOutbound = new ArrayList<ScoredJob>();
         List<BrokenReference> brokenReferences = new ArrayList<BrokenReference>();
         List<String> missingJobs = new ArrayList<String>();
+        Map<String, Integer> inboundScore = new HashMap<String, Integer>();
+        Map<String, Integer> outboundScore = new HashMap<String, Integer>();
         List<String> mapNodes = new ArrayList<String>();
         List<Edge> mapEdges = new ArrayList<Edge>();
 
@@ -132,6 +129,8 @@ public class FlowAnalyzer {
             }
             o.put("brokenReferences", broken);
             o.put("missingJobs", new JSONArray(missingJobs));
+            o.put("inboundScore", new JSONObject(inboundScore));
+            o.put("outboundScore", new JSONObject(outboundScore));
             o.put("mapNodes", new JSONArray(mapNodes));
 
             JSONArray edges = new JSONArray();
@@ -146,8 +145,7 @@ public class FlowAnalyzer {
     public AnalysisResult analyze(String rawJsonArray) {
         JSONArray arr = new JSONArray(rawJsonArray);
         List<Job> jobs = parseJobs(arr);
-        AnalysisResult result = analyzeJobs(jobs);
-        return result;
+        return analyzeJobs(jobs);
     }
 
     public AnalysisResult analyzeFile(String jsonFilePath) throws Exception {
@@ -179,7 +177,6 @@ public class FlowAnalyzer {
             job.versionSerial = o.optInt("versionserial", 0);
             job.datacenter = safeValue(o.optString("datacenter", "UNKNOWN"));
             job.jobname = safeValue(o.optString("jobname", ""));
-
             if (job.jobname.length() == 0) {
                 continue;
             }
@@ -268,38 +265,23 @@ public class FlowAnalyzer {
             }
         }
 
+        Collections.sort(result.starters);
+        Collections.sort(result.finals);
         result.totalStarters = result.starters.size();
         result.totalFinals = result.finals.size();
         result.totalBrokenReferences = result.brokenReferences.size();
 
-        result.topInbound = buildTop(canonical, inboundScore, 25);
-        result.topOutbound = buildTop(canonical, outboundScore, 25);
+        result.topInbound = buildTop(canonical, inboundScore, 50);
+        result.topOutbound = buildTop(canonical, outboundScore, 50);
         result.missingJobs = new ArrayList<String>(missingNames);
         Collections.sort(result.missingJobs);
         result.totalMissingJobs = result.missingJobs.size();
 
-        // Limites para no enviar payloads gigantes por WebSocket.
-        result.starters = trimList(result.starters, MAX_STARTERS_DETAILS);
-        result.finals = trimList(result.finals, MAX_FINALS_DETAILS);
-        result.brokenReferences = trimBrokenList(result.brokenReferences, MAX_BROKEN_DETAILS);
-        result.missingJobs = trimList(result.missingJobs, MAX_MISSING_DETAILS);
+        result.inboundScore = inboundScore;
+        result.outboundScore = outboundScore;
 
-        buildCompactGraph(canonical, canonicalNames, result);
+        buildFullGraph(canonical, canonicalNames, result);
         return result;
-    }
-
-    private static List<BrokenReference> trimBrokenList(List<BrokenReference> list, int max) {
-        if (list.size() <= max) {
-            return list;
-        }
-        return new ArrayList<BrokenReference>(list.subList(0, max));
-    }
-
-    private static List<String> trimList(List<String> list, int max) {
-        if (list.size() <= max) {
-            return list;
-        }
-        return new ArrayList<String>(list.subList(0, max));
     }
 
     private Map<String, Map<String, Set<String>>> buildOutByDatacenter(List<Job> jobs) {
@@ -371,19 +353,10 @@ public class FlowAnalyzer {
         return canonical;
     }
 
-    private void buildCompactGraph(List<Job> canonical, Set<String> canonicalNames, AnalysisResult result) {
+    private void buildFullGraph(List<Job> canonical, Set<String> canonicalNames, AnalysisResult result) {
         Set<String> nodes = new LinkedHashSet<String>();
-        for (int i = 0; i < result.starters.size() && i < 10; i++) {
-            nodes.add(result.starters.get(i));
-        }
-        for (int i = 0; i < result.finals.size() && i < 10; i++) {
-            nodes.add(result.finals.get(i));
-        }
-        for (int i = 0; i < result.topInbound.size() && i < 10; i++) {
-            nodes.add(result.topInbound.get(i).jobname);
-        }
-        for (int i = 0; i < result.topOutbound.size() && i < 10; i++) {
-            nodes.add(result.topOutbound.get(i).jobname);
+        for (Job job : canonical) {
+            nodes.add(job.jobname);
         }
 
         Set<String> edgeKeys = new HashSet<String>();
@@ -398,7 +371,7 @@ public class FlowAnalyzer {
                 if (!canonicalNames.contains(source) || !canonicalNames.contains(target)) {
                     continue;
                 }
-                if (!nodes.contains(source) || !nodes.contains(target)) {
+                if (source.equals(target)) {
                     continue;
                 }
                 String key = source + "->" + target;
@@ -411,6 +384,7 @@ public class FlowAnalyzer {
         }
 
         result.mapNodes = new ArrayList<String>(nodes);
+        Collections.sort(result.mapNodes);
     }
 
     private List<ScoredJob> buildTop(List<Job> canonical, Map<String, Integer> scoreMap, int max) {

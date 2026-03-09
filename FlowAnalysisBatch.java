@@ -1,0 +1,208 @@
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Map;
+
+public class FlowAnalysisBatch {
+
+    public static void main(String[] args) throws Exception {
+        if (args.length == 0) {
+            System.out.println("Uso: java FlowAnalysisBatch <ruta-json> [carpeta-salida]");
+            return;
+        }
+
+        String jsonPath = args[0];
+        String outputDir = args.length > 1 ? args[1] : "analisis";
+
+        FlowAnalyzer analyzer = new FlowAnalyzer();
+        long startedAt = System.currentTimeMillis();
+        FlowAnalyzer.AnalysisResult result = analyzer.analyzeFile(jsonPath);
+        long elapsed = System.currentTimeMillis() - startedAt;
+
+        File dir = new File(outputDir);
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new RuntimeException("No se pudo crear carpeta de salida: " + outputDir);
+        }
+
+        writeJsonResult(dir, result, elapsed);
+        writeTextReport(dir, result, elapsed, jsonPath);
+        writeLists(dir, result);
+        writeHtmlReport(dir, result, elapsed, jsonPath);
+
+        System.out.println("Analisis completado en " + elapsed + " ms");
+        System.out.println("Archivos generados en: " + dir.getAbsolutePath());
+    }
+
+    private static void writeJsonResult(File dir, FlowAnalyzer.AnalysisResult result, long elapsed) throws Exception {
+        JSONObject payload = new JSONObject();
+        payload.put("elapsedMs", elapsed);
+        payload.put("data", result.toJson());
+        writeUtf8(new File(dir, "resultado_completo.json"), payload.toString(2));
+    }
+
+    private static void writeTextReport(File dir, FlowAnalyzer.AnalysisResult result, long elapsed, String sourcePath) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        sb.append("REPORTE COMPLETO DE MALLA\n");
+        sb.append("Fuente JSON: ").append(sourcePath).append("\n");
+        sb.append("Tiempo analisis (ms): ").append(elapsed).append("\n");
+        sb.append("Jobs leidos: ").append(result.totalJobsRead).append("\n");
+        sb.append("Jobs canonicos: ").append(result.canonicalCount).append("\n");
+        sb.append("Jobs iniciadores: ").append(result.totalStarters).append("\n");
+        sb.append("Jobs finales: ").append(result.totalFinals).append("\n");
+        sb.append("Referencias rotas: ").append(result.totalBrokenReferences).append("\n");
+        sb.append("Jobs faltantes: ").append(result.totalMissingJobs).append("\n");
+        sb.append("Nodos malla: ").append(result.mapNodes.size()).append("\n");
+        sb.append("Aristas malla: ").append(result.mapEdges.size()).append("\n\n");
+
+        sb.append("TOP CRITICOS POR ENTRADA\n");
+        for (FlowAnalyzer.ScoredJob row : result.topInbound) {
+            sb.append(row.jobname).append(" | ").append(row.datacenter).append(" | ").append(row.score).append("\n");
+        }
+        sb.append("\nTOP CRITICOS POR SALIDA\n");
+        for (FlowAnalyzer.ScoredJob row : result.topOutbound) {
+            sb.append(row.jobname).append(" | ").append(row.datacenter).append(" | ").append(row.score).append("\n");
+        }
+
+        writeUtf8(new File(dir, "reporte_completo.txt"), sb.toString());
+    }
+
+    private static void writeLists(File dir, FlowAnalyzer.AnalysisResult result) throws Exception {
+        writeLines(new File(dir, "iniciadores.txt"), result.starters);
+        writeLines(new File(dir, "finales.txt"), result.finals);
+        writeLines(new File(dir, "jobs_faltantes.txt"), result.missingJobs);
+        writeLines(new File(dir, "nodos_malla.txt"), result.mapNodes);
+
+        StringBuilder brokenCsv = new StringBuilder();
+        brokenCsv.append("jobname,datacenter,condition,expectedFrom\n");
+        for (FlowAnalyzer.BrokenReference row : result.brokenReferences) {
+            brokenCsv.append(csv(row.jobname)).append(',')
+                .append(csv(row.datacenter)).append(',')
+                .append(csv(row.condition)).append(',')
+                .append(csv(row.expectedFrom)).append("\n");
+        }
+        writeUtf8(new File(dir, "referencias_rotas.csv"), brokenCsv.toString());
+
+        StringBuilder edgesCsv = new StringBuilder();
+        edgesCsv.append("source,target\n");
+        for (FlowAnalyzer.Edge row : result.mapEdges) {
+            edgesCsv.append(csv(row.source)).append(',').append(csv(row.target)).append("\n");
+        }
+        writeUtf8(new File(dir, "aristas_malla.csv"), edgesCsv.toString());
+
+        StringBuilder inCsv = new StringBuilder();
+        inCsv.append("jobname,score\n");
+        for (Map.Entry<String, Integer> row : result.inboundScore.entrySet()) {
+            inCsv.append(csv(row.getKey())).append(',').append(row.getValue().intValue()).append("\n");
+        }
+        writeUtf8(new File(dir, "score_entrada.csv"), inCsv.toString());
+
+        StringBuilder outCsv = new StringBuilder();
+        outCsv.append("jobname,score\n");
+        for (Map.Entry<String, Integer> row : result.outboundScore.entrySet()) {
+            outCsv.append(csv(row.getKey())).append(',').append(row.getValue().intValue()).append("\n");
+        }
+        writeUtf8(new File(dir, "score_salida.csv"), outCsv.toString());
+    }
+
+    private static void writeHtmlReport(File dir, FlowAnalyzer.AnalysisResult result, long elapsed, String sourcePath) throws Exception {
+        JSONObject data = result.toJson();
+        String json = data.toString();
+
+        StringBuilder html = new StringBuilder();
+        html.append("<!doctype html>\n");
+        html.append("<html lang=\"es\">\n");
+        html.append("<head>\n");
+        html.append("<meta charset=\"UTF-8\"/>\n");
+        html.append("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\"/>\n");
+        html.append("<title>Reporte de Malla</title>\n");
+        html.append("<style>");
+        html.append("body{margin:0;font-family:Arial,sans-serif;background:#0b1220;color:#e5e7eb;} ");
+        html.append(".wrap{max-width:1300px;margin:0 auto;padding:18px;} ");
+        html.append("h1,h2{margin:0 0 10px 0;} ");
+        html.append(".muted{color:#9ca3af;} ");
+        html.append(".grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:14px 0;} ");
+        html.append(".box{border:1px solid #263449;padding:10px;background:#111a2b;} ");
+        html.append(".row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;} ");
+        html.append("input,button{background:#0f172a;color:#e5e7eb;border:1px solid #334155;padding:7px 8px;} ");
+        html.append("button{cursor:pointer;} ");
+        html.append("canvas{width:100%;height:620px;display:block;border:1px solid #263449;background:#060b15;} ");
+        html.append("ul{margin:6px 0 0 18px;padding:0;max-height:220px;overflow:auto;} ");
+        html.append("li{margin:2px 0;} ");
+        html.append("@media(max-width:1100px){.grid{grid-template-columns:1fr;}} ");
+        html.append("</style>\n");
+        html.append("</head>\n");
+        html.append("<body>\n");
+        html.append("<div class=\"wrap\">\n");
+        html.append("<h1>Reporte Completo de Dependencias</h1>\n");
+        html.append("<p class=\"muted\">Fuente: ").append(escapeHtml(sourcePath)).append(" | Tiempo: ").append(elapsed).append(" ms</p>\n");
+        html.append("<div class=\"grid\" id=\"stats\"></div>\n");
+        html.append("<div class=\"box\">\n");
+        html.append("<h2>Malla completa (render incremental)</h2>\n");
+        html.append("<p class=\"muted\">Para datasets enormes, ajusta limite de nodos para explorar sin congelar el navegador.</p>\n");
+        html.append("<div class=\"row\">\n");
+        html.append("<label>Job semilla:</label><input id=\"seed\" type=\"text\" size=\"18\"/>\n");
+        html.append("<label>Profundidad:</label><input id=\"depth\" type=\"number\" value=\"3\" min=\"1\" max=\"20\"/>\n");
+        html.append("<label>Max nodos:</label><input id=\"maxNodes\" type=\"number\" value=\"800\" min=\"50\" max=\"5000\"/>\n");
+        html.append("<button id=\"renderBtn\">Renderizar</button>\n");
+        html.append("</div>\n");
+        html.append("<canvas id=\"graph\" width=\"1280\" height=\"620\"></canvas>\n");
+        html.append("</div>\n");
+        html.append("<div class=\"grid\">\n");
+        html.append("<div class=\"box\"><h2>Iniciadores</h2><ul id=\"starters\"></ul></div>\n");
+        html.append("<div class=\"box\"><h2>Finales</h2><ul id=\"finals\"></ul></div>\n");
+        html.append("<div class=\"box\"><h2>Jobs faltantes</h2><ul id=\"missing\"></ul></div>\n");
+        html.append("</div>\n");
+        html.append("</div>\n");
+        html.append("<script>\n");
+        html.append("const DATA=").append(json).append(";\n");
+        html.append("const stats=[['Jobs leidos',DATA.totalJobsRead],['Canonicos',DATA.canonicalCount],['Iniciadores',DATA.totalStarters],['Finales',DATA.totalFinals],['Rotas',DATA.totalBrokenReferences],['Faltantes',DATA.totalMissingJobs],['Nodos',DATA.mapNodes.length],['Aristas',DATA.mapEdges.length]];\n");
+        html.append("const statsEl=document.getElementById('stats');stats.forEach(s=>{const d=document.createElement('div');d.className='box';d.textContent=s[0]+': '+s[1];statsEl.appendChild(d);});\n");
+        html.append("function fill(id,arr,max){const el=document.getElementById(id);arr.slice(0,max).forEach(v=>{const li=document.createElement('li');li.textContent=typeof v==='string'?v:(v.jobname+' | '+v.condition+' | '+v.expectedFrom);el.appendChild(li);});}\n");
+        html.append("fill('starters',DATA.starters,1500);fill('finals',DATA.finals,1500);fill('missing',DATA.missingJobs,1500);\n");
+        html.append("const graph=document.getElementById('graph');const ctx=graph.getContext('2d');\n");
+        html.append("const outMap=new Map();DATA.mapEdges.forEach(e=>{if(!outMap.has(e.source))outMap.set(e.source,[]);outMap.get(e.source).push(e.target);});\n");
+        html.append("function buildSubset(seed,depth,maxNodes){const visited=new Set();const q=[];if(seed&&seed.length>0&&DATA.mapNodes.indexOf(seed)>=0){q.push({n:seed,d:0});}else{for(let i=0;i<DATA.starters.length&&i<50;i++)q.push({n:DATA.starters[i],d:0});if(q.length===0&&DATA.mapNodes.length>0)q.push({n:DATA.mapNodes[0],d:0});}while(q.length&&visited.size<maxNodes){const cur=q.shift();if(visited.has(cur.n)||cur.d>depth)continue;visited.add(cur.n);const outs=outMap.get(cur.n)||[];for(let i=0;i<outs.length;i++){if(!visited.has(outs[i]))q.push({n:outs[i],d:cur.d+1});if(visited.size+q.length>=maxNodes)break;}}const nodes=[...visited];const nodeSet=new Set(nodes);const edges=[];for(let i=0;i<DATA.mapEdges.length;i++){const e=DATA.mapEdges[i];if(nodeSet.has(e.source)&&nodeSet.has(e.target))edges.push(e);}return {nodes,edges};}\n");
+        html.append("function render(){const seed=document.getElementById('seed').value.trim();const depth=parseInt(document.getElementById('depth').value,10)||3;const maxNodes=parseInt(document.getElementById('maxNodes').value,10)||800;const subset=buildSubset(seed,depth,maxNodes);const n=subset.nodes.length;if(n===0){ctx.clearRect(0,0,graph.width,graph.height);return;}const pos=new Map();const cols=Math.max(2,Math.floor(Math.sqrt(n)));for(let i=0;i<n;i++){const c=i%cols;const r=Math.floor(i/cols);const x=40+(c/(cols-1||1))*(graph.width-80)+(Math.random()*14-7);const y=30+(r/(Math.ceil(n/cols)-1||1))*(graph.height-60)+(Math.random()*14-7);pos.set(subset.nodes[i],{x:x,y:y,vx:0,vy:0});}for(let step=0;step<120;step++){for(let i=0;i<subset.nodes.length;i++){const a=pos.get(subset.nodes[i]);for(let j=i+1;j<subset.nodes.length;j++){const b=pos.get(subset.nodes[j]);let dx=a.x-b.x;let dy=a.y-b.y;let dist=Math.sqrt(dx*dx+dy*dy)+0.1;let f=2200/(dist*dist);a.vx+=dx/dist*f;b.vx-=dx/dist*f;a.vy+=dy/dist*f;b.vy-=dy/dist*f;}}for(let i=0;i<subset.edges.length;i++){const e=subset.edges[i];const a=pos.get(e.source);const b=pos.get(e.target);let dx=b.x-a.x;let dy=b.y-a.y;let dist=Math.sqrt(dx*dx+dy*dy)+0.1;let stretch=(dist-70)*0.02;a.vx+=dx/dist*stretch;a.vy+=dy/dist*stretch;b.vx-=dx/dist*stretch;b.vy-=dy/dist*stretch;}subset.nodes.forEach(name=>{const p=pos.get(name);p.vx*=0.84;p.vy*=0.84;p.x=Math.max(10,Math.min(graph.width-10,p.x+p.vx));p.y=Math.max(10,Math.min(graph.height-10,p.y+p.vy));});}ctx.clearRect(0,0,graph.width,graph.height);ctx.strokeStyle='rgba(56,189,248,0.25)';for(let i=0;i<subset.edges.length;i++){const e=subset.edges[i];const a=pos.get(e.source);const b=pos.get(e.target);ctx.beginPath();ctx.moveTo(a.x,a.y);ctx.lineTo(b.x,b.y);ctx.stroke();}subset.nodes.forEach(name=>{const p=pos.get(name);const isStart=DATA.starters.indexOf(name)>=0;const isFinal=DATA.finals.indexOf(name)>=0;ctx.fillStyle=isStart?'#34d399':(isFinal?'#f59e0b':'#93c5fd');ctx.beginPath();ctx.arc(p.x,p.y,3.3,0,Math.PI*2);ctx.fill();});}\n");
+        html.append("document.getElementById('renderBtn').addEventListener('click',render);render();\n");
+        html.append("</script>\n");
+        html.append("</body>\n");
+        html.append("</html>\n");
+
+        writeUtf8(new File(dir, "reporte_completo.html"), html.toString());
+    }
+
+    private static void writeLines(File file, List<String> lines) throws Exception {
+        StringBuilder sb = new StringBuilder();
+        for (String line : lines) {
+            sb.append(line).append('\n');
+        }
+        writeUtf8(file, sb.toString());
+    }
+
+    private static void writeUtf8(File file, String value) throws Exception {
+        BufferedWriter writer = null;
+        try {
+            writer = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(file), StandardCharsets.UTF_8));
+            writer.write(value);
+        } finally {
+            if (writer != null) {
+                writer.close();
+            }
+        }
+    }
+
+    private static String escapeHtml(String value) {
+        return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    private static String csv(String value) {
+        String v = value == null ? "" : value;
+        return "\"" + v.replace("\"", "\"\"") + "\"";
+    }
+}
